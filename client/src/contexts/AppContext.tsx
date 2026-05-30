@@ -68,6 +68,14 @@ export interface AuditLog {
   status: "success" | "warning" | "failed";
 }
 
+export interface ChatMessage {
+  id: string;
+  sender: "user" | "ai";
+  text: string;
+  time: string;
+  suggestions?: string[];
+}
+
 interface AppContextType {
   projects: Project[];
   activeProjectId: string | null;
@@ -98,6 +106,9 @@ interface AppContextType {
     vulnerabilities: Vulnerability[];
     code: string;
   };
+  chatMessages: ChatMessage[];
+  sendChatMessage: (text: string) => void;
+  isChatTyping: boolean;
 }
 
 // ==================== INITIAL DATA ====================
@@ -316,6 +327,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     vulnerabilities: [],
     code: ""
   });
+
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+    {
+      id: "MSG-001",
+      sender: "ai",
+      text: "您好！我是您的 AI 漏洞挖掘专属助手。您可以向我下达漏洞审计指令，或者让我协助您引导引擎进行特定漏洞的深入挖掘。\n\n例如：\n1. 帮我扫描 Secured-Payment-Gateway 项目中的越权漏洞。\n2. 引导引擎对 api/users.py 进行二次注入深度审计。\n3. 分析当前 AI-Chat-Agent 生态中的提示词注入风险。",
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      suggestions: [
+        "审计 Secured-Payment-Gateway 越权漏洞",
+        "深度分析 AI-Chat-Agent 提示词注入风险",
+        "查看最新规则库配置"
+      ]
+    }
+  ]);
+  const [isChatTyping, setIsChatTyping] = useState(false);
 
   // Toggle integrations
   const toggleIntegration = (key: "git" | "jenkins" | "jira" | "vscode" | "dingtalk") => {
@@ -618,6 +644,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addAuditLog(`下线检测规则: ${id}`);
   };
 
+  // Send message and trigger AI response simulation
+  const sendChatMessage = (text: string) => {
+    if (!text.trim()) return;
+
+    const userMsg: ChatMessage = {
+      id: `MSG-${Date.now()}`,
+      sender: "user",
+      text,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
+    setChatMessages(prev => [...prev, userMsg]);
+    setIsChatTyping(true);
+
+    // AI Response Logic
+    setTimeout(() => {
+      let aiText = "收到您的指令，正在理解上下文并为您调度底层 AI 漏洞挖掘引擎...";
+      let suggestions: string[] = [];
+
+      const query = text.toLowerCase();
+      if (query.includes("payment") || query.includes("支付") || query.includes("越权")) {
+        aiText = "已为您成功调度 AI 漏洞挖掘引擎，对 **Secured-Payment-Gateway** 项目的访问控制链路进行了二次扫描。\n\n大模型推理结果指出：\n1. 发现位于 `CheckoutService.java` 第 89 行的**支付参数篡改漏洞**（高危）。\n2. 建议通过重新从数据库获取真实价格来阻断前端篡改攻击。\n\n您可以在‘项目管理’中查看完整的控制流图谱并一键应用 AI 修复补丁。";
+        suggestions = ["查看 Secured-Payment-Gateway 审计详情", "应用该支付漏洞修复补丁", "查看支付参数篡改数据流"];
+      } else if (query.includes("agent") || query.includes("提示词") || query.includes("注入")) {
+        aiText = "已为您定位到 **AI-Chat-Agent** 生态中的安全缺陷。\n\n分析报告指出：\n1. 在 `shell_executor.py` 第 18 行，智能体直接调用本地 shell 执行任务时，直接信任了大模型生成的自然语言文本，造成了典型的**提示词注入命令执行漏洞**。\n\n已为您自动生成了强隔离 Docker 沙箱白名单防御补丁，建议立即在‘项目管理’中进行一键部署。";
+        suggestions = ["查看 AI-Chat-Agent 审计详情", "部署 Docker 沙箱白名单补丁", "查看命令执行漏洞数据流"];
+      } else if (query.includes("规则") || query.includes("rule")) {
+        aiText = "已为您载入当前安全规则库。\n目前规则库已全面对标 **CWE** 与 **OWASP Top 10**，并支持大模型自然语言智能编译。您可以前往‘规则管理’面板创建和下发自定义规则。";
+        suggestions = ["创建自定义规则", "查看当前全部检测规则"];
+      } else {
+        aiText = "已收到您的引导指令：“" + text + "”。\n\nAI 漏洞挖掘智能体已将其编译为全新的审计约束，并已自动同步至底层符号分析引擎中。下一次对项目执行全量安全审计时，引擎将重点强化针对该逻辑链的指向性与污点可达分析。";
+        suggestions = ["启动全量安全审计", "查看当前引擎性能指标"];
+      }
+
+      const aiMsg: ChatMessage = {
+        id: `MSG-${Date.now() + 1}`,
+        sender: "ai",
+        text: aiText,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        suggestions: suggestions.length > 0 ? suggestions : undefined
+      };
+
+      setChatMessages(prev => [...prev, aiMsg]);
+      setIsChatTyping(false);
+      addAuditLog(`AI 对话引导指令: ${text.substring(0, 20)}...`);
+    }, 1500);
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -638,7 +712,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         integrations,
         toggleIntegration,
         triggerQuickScan,
-        quickScanResult
+        quickScanResult,
+        chatMessages,
+        sendChatMessage,
+        isChatTyping
       }}
     >
       {children}

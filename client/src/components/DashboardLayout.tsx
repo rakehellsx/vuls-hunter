@@ -11,7 +11,8 @@ import {
   History, 
   Cpu, 
   LogOut,
-  Bell
+  Bell,
+  Sparkles
 } from "lucide-react";
 
 interface DashboardLayoutProps {
@@ -23,28 +24,29 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
   const menuItems = [
     { id: "overview", label: "概览统计", icon: LayoutDashboard },
+    { id: "chat-agent", label: "智能对话", icon: Sparkles },
     { id: "quick-scan", label: "快速检测", icon: Zap },
     { id: "projects", label: "项目管理", icon: FolderGit2 },
     { id: "rules", label: "规则管理", icon: BookOpen },
     { id: "reports", label: "报告管理", icon: FileText },
-    { id: "engine", label: "引擎端管理", icon: Cpu },
+    { id: "engine", label: "引擎管理", icon: Cpu },
     { id: "audit", label: "日志审计", icon: History },
     { id: "settings", label: "系统管理", icon: Settings },
   ];
 
   return (
     <div className="min-h-screen bg-[#fafaf9] text-[#1c1917] flex font-sans antialiased">
-      {/* 侧边栏 */}
-      <aside className="w-64 bg-white border-r border-[#e7e5e4] flex flex-col justify-between sticky top-0 h-screen z-20">
+      {/* 侧边栏 - 优化排版收窄至 w-56 (从 w-64) 以减少左侧空白，让主体区域更大 */}
+      <aside className="w-56 bg-white border-r border-[#e7e5e4] flex flex-col justify-between sticky top-0 h-screen z-20">
         <div className="flex flex-col">
           {/* Logo */}
-          <div className="p-6 border-b border-[#e7e5e4] flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-md shadow-blue-500/10">
-              <ShieldAlert className="w-5 h-5" />
+          <div className="p-5 border-b border-[#e7e5e4] flex items-center gap-2.5">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white shadow-md shadow-blue-500/10 shrink-0">
+              <ShieldAlert className="w-4.5 h-4.5" />
             </div>
-            <div>
-              <h1 className="font-bold text-base tracking-tight text-[#1c1917]">AI-Vuln Scanner</h1>
-              <p className="text-xs text-[#78716c] font-medium">AI 漏洞挖掘平台</p>
+            <div className="min-w-0">
+              <h1 className="font-bold text-sm tracking-tight text-[#1c1917] truncate">AI-Vuln Scanner</h1>
+              <p className="text-[10px] text-[#78716c] font-medium truncate">AI 漏洞挖掘平台</p>
             </div>
           </div>
 
@@ -118,8 +120,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           </div>
         </header>
 
-        {/* 页面主内容 */}
-        <main className="flex-1 p-8 overflow-y-auto max-w-7xl w-full mx-auto">
+        {/* 页面主内容 - 调整最大宽度至 max-w-[1400px] (从 max-w-7xl) 更好地利用屏幕宽度，解决左侧空白过多的问题 */}
+        <main className="flex-1 p-8 overflow-y-auto max-w-[1400px] w-full mx-auto">
           {children}
         </main>
       </div>

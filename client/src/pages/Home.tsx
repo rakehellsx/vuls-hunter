@@ -9,6 +9,7 @@ import Reports from "./Reports";
 import Engine from "./Engine";
 import Audit from "./Audit";
 import Settings from "./Settings";
+import ChatAgent from "./ChatAgent";
 
 export default function Home() {
   const { activeTab } = useApp();
@@ -19,6 +20,8 @@ export default function Home() {
         return <Overview />;
       case "quick-scan":
         return <QuickScan />;
+      case "chat-agent":
+        return <ChatAgent />;
       case "projects":
         return <Projects />;
       case "rules":

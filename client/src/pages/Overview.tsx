@@ -44,10 +44,6 @@ export default function Overview() {
       {/* 欢迎与 Banner */}
       <div className="relative overflow-hidden bg-white border border-[#e7e5e4] rounded-2xl p-8 shadow-[0_8px_30px_rgb(0,0,0,0.02)] flex items-center justify-between">
         <div className="space-y-3 max-w-xl z-10">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-100 text-blue-700 text-xs font-semibold">
-            <Sparkles className="w-3.5 h-3.5" />
-            AI 智能审计时代已开启
-          </div>
           <h2 className="text-2xl font-bold tracking-tight text-[#1c1917]">
             欢迎使用 AI-Vuln Scanner 漏洞挖掘系统
           </h2>
@@ -56,17 +52,17 @@ export default function Overview() {
           </p>
           <div className="pt-2 flex gap-4">
             <button 
-              onClick={() => setActiveTab("quick-scan")}
+              onClick={() => setActiveTab("chat-agent")}
               className="px-4 py-2 bg-blue-700 text-white rounded-lg text-xs font-bold hover:bg-blue-800 transition-colors shadow-sm flex items-center gap-1.5"
             >
-              立即快速检测
-              <ArrowRight className="w-3.5 h-3.5" />
+              进入智能对话挖掘
+              <Sparkles className="w-3.5 h-3.5" />
             </button>
             <button 
-              onClick={() => setActiveTab("projects")}
+              onClick={() => setActiveTab("quick-scan")}
               className="px-4 py-2 border border-[#e7e5e4] text-[#57534e] rounded-lg text-xs font-semibold hover:bg-[#fafaf9] transition-colors"
             >
-              管理代码仓库
+              快速检测代码
             </button>
           </div>
         </div>
