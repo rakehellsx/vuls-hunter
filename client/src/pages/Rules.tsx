@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import { useApp } from "@/contexts/AppContext";
+import { rulesApi } from "@/lib/api";
+import { toast } from "sonner";
 import { 
   BookOpen, 
   Plus, 
@@ -8,12 +10,15 @@ import {
   ShieldAlert, 
   AlertTriangle, 
   X,
-  Sparkles
+  Sparkles,
+  Lock,
+  Zap
 } from "lucide-react";
 
 export default function Rules() {
-  const { rules, addRule, deleteRule } = useApp();
+  const { rules, addRule, deleteRule, refreshData } = useApp();
   const [showAddModal, setShowAddModal] = useState(false);
+  const [compilingId, setCompilingId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [lang, setLang] = useState("Python");
   const [severity, setSeverity] = useState<"critical" | "high" | "medium" | "low">("critical");
@@ -89,12 +94,19 @@ export default function Rules() {
                   <h4 className="text-sm font-bold text-[#1c1917]">{rule.name}</h4>
                 </div>
 
-                <button
-                  onClick={() => deleteRule(rule.id)}
-                  className="p-1.5 text-stone-400 hover:text-red-600 rounded-lg hover:bg-stone-50 transition-colors"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                {rule.isBuiltin ? (
+                  <span className="p-1.5 text-stone-300 rounded-lg" title="内置规则不可删除">
+                    <Lock className="w-3.5 h-3.5" />
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => deleteRule(rule.id)}
+                    className="p-1.5 text-stone-400 hover:text-red-600 rounded-lg hover:bg-stone-50 transition-colors"
+                    title="删除规则"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
 
               <p className="text-xs text-[#57534e] leading-relaxed">
@@ -121,10 +133,40 @@ export default function Rules() {
             </div>
 
             <div className="border-t border-[#f5f5f4] pt-3 flex items-center justify-between text-xs text-[#78716c] font-medium">
-              <span>规则 ID：{rule.id}</span>
-              <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-100 font-semibold">
-                {rule.type === "security" ? "安全缺陷" : rule.type === "quality" ? "质量缺陷" : "标准规范"}
+              <span className="flex items-center gap-1.5">
+                {rule.isBuiltin && <Lock className="w-3 h-3 text-stone-400" title="内置规则" />}
+                规则 ID：{rule.id}
               </span>
+              <div className="flex items-center gap-2">
+                <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded border border-blue-100 font-semibold">
+                  {rule.type === "security" ? "安全缺陷" : rule.type === "quality" ? "质量缺陷" : "标准规范"}
+                </span>
+                {!rule.isBuiltin && rule._backendId && (
+                  <button
+                    onClick={async () => {
+                      setCompilingId(rule.id);
+                      try {
+                        await rulesApi.compileWithAI(rule._backendId!);
+                        toast.success(`规则 "${rule.name}" AI 编译增强完成！`);
+                        await refreshData();
+                      } catch {
+                        toast.error("AI 编译失败，请检查 API 配置");
+                      } finally {
+                        setCompilingId(null);
+                      }
+                    }}
+                    disabled={compilingId === rule.id}
+                    className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded border border-amber-100 font-semibold hover:bg-amber-100 transition-colors flex items-center gap-1 disabled:opacity-50"
+                    title="使用 AI 增强规则描述和示例"
+                  >
+                    {compilingId === rule.id ? (
+                      <><Zap className="w-3 h-3 animate-spin" />编译中...</>
+                    ) : (
+                      <><Sparkles className="w-3 h-3" />AI 增强</>
+                    )}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         ))}

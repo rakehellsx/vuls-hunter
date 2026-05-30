@@ -41,13 +41,16 @@ export default function Engine() {
     return () => clearInterval(interval);
   }, []);
 
-  const handleRestartEngine = () => {
+  const handleRestartEngine = async () => {
     toast.promise(
-      new Promise((resolve) => setTimeout(resolve, 2000)),
+      (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await fetchStatus();
+      })(),
       {
-        loading: "正在重新编译与热加载 AI 漏洞挖掘引擎内核...",
-        success: "AI 漏洞挖掘引擎热重启成功，各分析模块运行正常！",
-        error: "重启失败"
+        loading: "正在刷新引擎状态...",
+        success: "引擎状态已刷新！",
+        error: "刷新失败"
       }
     );
   };
@@ -98,7 +101,7 @@ export default function Engine() {
           className="px-4 py-2 border border-blue-600 text-blue-700 bg-blue-50/50 rounded-lg text-xs font-bold hover:bg-blue-100 transition-colors flex items-center gap-1.5"
         >
           <RefreshCw className="w-3.5 h-3.5" />
-          重启引擎内核
+          刷新引擎状态
         </button>
       </div>
 

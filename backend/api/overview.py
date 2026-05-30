@@ -211,7 +211,19 @@ Format your response with clear sections when appropriate."""
 
     except Exception as exc:
         logger.exception("Chat agent failed")
-        raise HTTPException(status_code=500, detail=f"AI agent error: {exc}")
+        # Return a graceful fallback instead of 500
+        fallback_text = (
+            "抱歉，AI 助手暂时无法响应（可能是 API 密钥未配置或网络问题）。\n\n"
+            "您可以尝试：\n"
+            "1. 检查后端 OPENAI_API_KEY 环境变量是否已正确配置\n"
+            "2. 直接使用快速扫描功能对代码进行漏洞检测\n"
+            "3. 查看已有的扫描报告了解当前安全状态"
+        )
+        return {
+            "text": fallback_text,
+            "suggestions": ["启动快速扫描", "查看扫描报告", "查看规则库"],
+            "session_id": request.session_id,
+        }
 
 
 def _generate_suggestions(message: str, vulns: list) -> list[str]:

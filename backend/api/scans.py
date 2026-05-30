@@ -227,7 +227,14 @@ async def _save_report(
         grade = "A+"
 
     report_id = f"RPT-{datetime.utcnow().strftime('%Y%m%d')}-{scan_id:04d}"
+    # Try to get real project name if scan is associated with a project
     project_name = scan.target[:50] if scan.target else "Unknown"
+    if scan.project_id:
+        from ..db.models import Project as ProjectModel
+        proj_result = await db.execute(select(ProjectModel).where(ProjectModel.id == scan.project_id))
+        proj = proj_result.scalar_one_or_none()
+        if proj:
+            project_name = proj.name
 
     # Build full report markdown
     full_md = f"""# 安全审计报告 {report_id}
