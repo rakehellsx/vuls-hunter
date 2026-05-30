@@ -163,6 +163,30 @@ export const projectsApi = {
       body: JSON.stringify(data),
     }),
 
+  createFromArchive: async (data: {
+    name: string;
+    language: string;
+    description?: string;
+    branch?: string;
+    file: File;
+  }): Promise<ApiProject & { archive_filename?: string }> => {
+    const formData = new FormData();
+    formData.append("name", data.name);
+    formData.append("language", data.language);
+    formData.append("description", data.description || "");
+    formData.append("branch", data.branch || "main");
+    formData.append("file", data.file);
+    const res = await fetch(`${API_BASE}/projects/upload-archive`, {
+      method: "POST",
+      body: formData,
+    });
+    if (!res.ok) {
+      const error = await res.text();
+      throw new Error(`Upload failed (${res.status}): ${error}`);
+    }
+    return res.json();
+  },
+
   delete: (id: number) =>
     request<{ success: boolean }>(`/projects/${id}`, { method: "DELETE" }),
 

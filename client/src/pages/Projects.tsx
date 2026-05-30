@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useApp, Project } from "@/contexts/AppContext";
+import { projectsApi } from "@/lib/api";
 import { 
   Play, 
   Trash2, 
@@ -13,7 +14,10 @@ import {
   ArrowRight,
   GitBranch,
   X,
-  RefreshCw
+  RefreshCw,
+  Upload,
+  Link,
+  Archive
 } from "lucide-react";
 
 export default function Projects() {
@@ -29,9 +33,15 @@ export default function Projects() {
   } = useApp();
 
   const [showAddModal, setShowAddModal] = useState(false);
+  const [sourceType, setSourceType] = useState<"git" | "archive">("git");
   const [name, setName] = useState("");
   const [repoUrl, setRepoUrl] = useState("");
   const [lang, setLang] = useState("Java");
+  const [archiveFile, setArchiveFile] = useState<File | null>(null);
+  const [archiveDragOver, setArchiveDragOver] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -52,13 +62,29 @@ export default function Projects() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !repoUrl) return;
-    const prevCount = projects.length;
-    await addProject(name, repoUrl, lang);
-    setName("");
-    setRepoUrl("");
-    setShowAddModal(false);
-    // 新建后自动选中（通过 useEffect 触发，此处 projects 还未更新，延迟一帧）
+    setSubmitError("");
+    if (!name) return;
+
+    setIsSubmitting(true);
+    try {
+      if (sourceType === "git") {
+        if (!repoUrl) { setSubmitError("请输入 Git 仓库 URL"); setIsSubmitting(false); return; }
+        await addProject(name, repoUrl, lang);
+      } else {
+        if (!archiveFile) { setSubmitError("请选择压缩包文件"); setIsSubmitting(false); return; }
+        await projectsApi.createFromArchive({ name, language: lang, file: archiveFile });
+        await refreshData();
+      }
+      setName("");
+      setRepoUrl("");
+      setArchiveFile(null);
+      setSourceType("git");
+      setShowAddModal(false);
+    } catch (err: any) {
+      setSubmitError(err.message || "创建失败，请重试");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
@@ -429,44 +455,137 @@ export default function Projects() {
       {showAddModal && (
         <div 
           className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn"
-          onClick={(e) => { if (e.target === e.currentTarget) setShowAddModal(false); }}
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowAddModal(false); setSubmitError(""); } }}
         >
           <div className="bg-white border border-[#e7e5e4] rounded-xl p-6 w-full max-w-md shadow-2xl space-y-4">
+            {/* 弹窗标题 */}
             <div className="flex items-center justify-between border-b border-[#f5f5f4] pb-3">
               <h3 className="text-base font-bold text-[#1c1917]">关联代码仓库</h3>
               <button 
-                onClick={() => setShowAddModal(false)}
+                onClick={() => { setShowAddModal(false); setSubmitError(""); }}
                 className="p-1.5 hover:bg-stone-50 rounded-lg text-stone-400 hover:text-stone-700 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
+            {/* 来源类型切换 */}
+            <div className="flex gap-2 p-1 bg-stone-100 rounded-lg">
+              <button
+                type="button"
+                onClick={() => { setSourceType("git"); setSubmitError(""); }}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-bold transition-all ${
+                  sourceType === "git"
+                    ? "bg-white text-blue-700 shadow-sm border border-[#e7e5e4]"
+                    : "text-stone-500 hover:text-stone-700"
+                }`}
+              >
+                <Link className="w-3.5 h-3.5" />
+                Git 仓库 URL
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSourceType("archive"); setSubmitError(""); }}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-bold transition-all ${
+                  sourceType === "archive"
+                    ? "bg-white text-blue-700 shadow-sm border border-[#e7e5e4]"
+                    : "text-stone-500 hover:text-stone-700"
+                }`}
+              >
+                <Upload className="w-3.5 h-3.5" />
+                上传压缩包
+              </button>
+            </div>
+
             <form onSubmit={handleSubmit} className="space-y-4">
+              {/* 项目名称 */}
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-[#57534e]">项目/仓库名称</label>
+                <label className="text-xs font-bold text-[#57534e]">项目名称</label>
                 <input
                   type="text"
                   required
-                  placeholder="例如：Secured-Payment-Gateway"
+                  placeholder="例如：Payment-Gateway-Audit"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full px-3 py-2 border border-[#e7e5e4] rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-600 bg-[#fafaf9]"
                 />
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-[#57534e]">Git 仓库 URL (HTTPS/SSH)</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="https://github.com/org/repo.git"
-                  value={repoUrl}
-                  onChange={(e) => setRepoUrl(e.target.value)}
-                  className="w-full px-3 py-2 border border-[#e7e5e4] rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-600 bg-[#fafaf9]"
-                />
-              </div>
+              {/* Git URL 模式 */}
+              {sourceType === "git" && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-[#57534e]">Git 仓库 URL (HTTPS/SSH)</label>
+                  <input
+                    type="text"
+                    placeholder="https://github.com/org/repo.git"
+                    value={repoUrl}
+                    onChange={(e) => setRepoUrl(e.target.value)}
+                    className="w-full px-3 py-2 border border-[#e7e5e4] rounded-lg text-sm focus:outline-none focus:ring-1 focus:ring-blue-600 bg-[#fafaf9]"
+                  />
+                  <p className="text-[10px] text-stone-400">支持 GitHub、GitLab、Gitee 等 HTTPS/SSH 地址</p>
+                </div>
+              )}
 
+              {/* 压缩包上传模式 */}
+              {sourceType === "archive" && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-[#57534e]">代码压缩包</label>
+                  <div
+                    className={`relative border-2 border-dashed rounded-xl p-5 text-center cursor-pointer transition-all ${
+                      archiveDragOver
+                        ? "border-blue-500 bg-blue-50"
+                        : archiveFile
+                        ? "border-emerald-400 bg-emerald-50"
+                        : "border-[#e7e5e4] hover:border-blue-400 hover:bg-blue-50/30"
+                    }`}
+                    onClick={() => fileInputRef.current?.click()}
+                    onDragOver={(e) => { e.preventDefault(); setArchiveDragOver(true); }}
+                    onDragLeave={() => setArchiveDragOver(false)}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      setArchiveDragOver(false);
+                      const f = e.dataTransfer.files[0];
+                      if (f) setArchiveFile(f);
+                    }}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".zip,.tar,.tar.gz,.tgz,.tar.bz2,.tar.xz"
+                      className="hidden"
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) setArchiveFile(f); }}
+                    />
+                    {archiveFile ? (
+                      <div className="flex items-center justify-center gap-2">
+                        <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        </div>
+                        <div className="text-left">
+                          <p className="text-xs font-bold text-emerald-800 truncate max-w-[200px]">{archiveFile.name}</p>
+                          <p className="text-[10px] text-emerald-600">{(archiveFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); setArchiveFile(null); }}
+                          className="ml-auto p-1 text-stone-400 hover:text-red-500 rounded"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div className="w-10 h-10 bg-stone-100 rounded-xl flex items-center justify-center mx-auto">
+                          <Upload className="w-5 h-5 text-stone-400" />
+                        </div>
+                        <p className="text-xs font-semibold text-stone-600">点击选择或拖拽压缩包到此处</p>
+                        <p className="text-[10px] text-stone-400">支持 .zip / .tar / .tar.gz / .tgz，最大 50MB</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 主要开发语言 */}
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-[#57534e]">主要开发语言</label>
                 <select
@@ -482,22 +601,39 @@ export default function Projects() {
                   <option value="TypeScript">TypeScript</option>
                   <option value="PHP">PHP</option>
                   <option value="Ruby">Ruby</option>
+                  <option value="Rust">Rust</option>
+                  <option value="C#">C#</option>
                 </select>
               </div>
 
-              <div className="pt-3 flex gap-3">
+              {/* 错误提示 */}
+              {submitError && (
+                <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 font-medium">
+                  {submitError}
+                </div>
+              )}
+
+              {/* 操作按钮 */}
+              <div className="pt-1 flex gap-3">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => { setShowAddModal(false); setSubmitError(""); }}
                   className="flex-1 py-2 border border-[#e7e5e4] text-[#57534e] rounded-lg text-xs font-semibold hover:bg-[#fafaf9] transition-colors"
                 >
                   取消
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-blue-700 text-white rounded-lg text-xs font-bold hover:bg-blue-800 transition-colors shadow-sm"
+                  disabled={isSubmitting}
+                  className="flex-1 py-2 bg-blue-700 text-white rounded-lg text-xs font-bold hover:bg-blue-800 disabled:bg-blue-300 transition-colors shadow-sm flex items-center justify-center gap-1.5"
                 >
-                  确认关联
+                  {isSubmitting ? (
+                    <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin"></span> 处理中...</>
+                  ) : sourceType === "archive" ? (
+                    <><Upload className="w-3.5 h-3.5" /> 上传并创建项目</>
+                  ) : (
+                    "确认关联"
+                  )}
                 </button>
               </div>
             </form>

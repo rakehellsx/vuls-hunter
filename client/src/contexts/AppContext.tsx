@@ -104,6 +104,10 @@ export interface ChatMessage {
   text: string;
   time: string;
   suggestions?: string[];
+  // 扫描日志气泡扩展字段
+  scanLogs?: string[];
+  scanStatus?: "running" | "completed" | "failed";
+  scanTitle?: string;
 }
 
 export interface ChatSession {
@@ -151,6 +155,8 @@ interface AppContextType {
   createNewSession: () => void;
   deleteSession: (id: string) => void;
   sendChatMessage: (text: string) => void;
+  addChatMessage: (msg: ChatMessage) => void;
+  updateChatMessage: (msgId: string, updater: (prev: ChatMessage) => ChatMessage) => void;
   isChatTyping: boolean;
   isLoading: boolean;
   refreshData: () => void;
@@ -664,6 +670,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [activeSessionId]
   );
 
+  // ─── Chat helpers ──────────────────────────────────────────────────────────
+
+  const addChatMessage = useCallback(
+    (msg: ChatMessage) => {
+      setChatSessions((prev) =>
+        prev.map((sess) =>
+          sess.id === activeSessionId
+            ? {
+                ...sess,
+                lastMessage: msg.text.substring(0, 40),
+                messages: [...sess.messages, msg],
+              }
+            : sess
+        )
+      );
+    },
+    [activeSessionId]
+  );
+
+  const updateChatMessage = useCallback(
+    (msgId: string, updater: (prev: ChatMessage) => ChatMessage) => {
+      setChatSessions((prev) =>
+        prev.map((sess) =>
+          sess.id === activeSessionId
+            ? {
+                ...sess,
+                messages: sess.messages.map((m) => (m.id === msgId ? updater(m) : m)),
+              }
+            : sess
+        )
+      );
+    },
+    [activeSessionId]
+  );
+
   const sendChatMessage = useCallback(
     async (text: string) => {
       const userMsg: ChatMessage = {
@@ -760,6 +801,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createNewSession,
         deleteSession,
         sendChatMessage,
+        addChatMessage,
+        updateChatMessage,
         isChatTyping,
         isLoading,
         refreshData,
