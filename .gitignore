@@ -105,6 +105,19 @@ temp/
 *.sqlite
 *.sqlite3
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.Python
+*.egg-info/
+.venv/
+venv/
+
+# Strix scan runs
+strix_runs/
+data/
+
 # Webdev artifacts (checkpoint zips, migrations, etc.)
 .webdev/
 

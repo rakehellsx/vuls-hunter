@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { useApp } from "@/contexts/AppContext";
 import { 
   FileText, 
@@ -7,15 +7,60 @@ import {
   Calendar, 
   Folder,
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  X
 } from "lucide-react";
 import { toast } from "sonner";
+import { reportsApi } from "@/lib/api";
 
 export default function Reports() {
   const { reports } = useApp();
+  const [previewMd, setPreviewMd] = useState<string | null>(null);
+  const [previewTitle, setPreviewTitle] = useState("");
 
-  const handleDownload = (reportName: string) => {
-    toast.success(`安全审计报告 ${reportName} 已成功生成 PDF/Markdown，开始自动下载...`);
+  const handleDownload = async (report: typeof reports[0]) => {
+    if (!report._backendId) {
+      toast.info(`报告 ${report.id} 尚未关联后端数据`);
+      return;
+    }
+    try {
+      const md = await reportsApi.getMarkdown(report._backendId);
+      const blob = new Blob([md], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${report.id}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`安全审计报告 ${report.id} 已开始下载！`);
+    } catch (err) {
+      toast.error(`下载失败: ${err}`);
+    }
+  };
+
+  const handlePreview = async (report: typeof reports[0]) => {
+    if (!report._backendId) {
+      toast.info("该报告暂无详细内容");
+      return;
+    }
+    try {
+      const md = await reportsApi.getMarkdown(report._backendId);
+      setPreviewMd(md);
+      setPreviewTitle(report.id);
+    } catch (err) {
+      toast.error(`加载报告失败: ${err}`);
+    }
+  };
+
+  const getGrade = (report: typeof reports[0]) => {
+    return report.complianceGrade || (
+      report.vulnerabilityCount.critical === 0 && report.vulnerabilityCount.high === 0 ? "A+" : "D-"
+    );
+  };
+
+  const isPassed = (report: typeof reports[0]) => {
+    const grade = getGrade(report);
+    return grade === "A+" || grade === "A" || grade === "B+" || grade === "B";
   };
 
   return (
@@ -24,30 +69,33 @@ export default function Reports() {
       <div className="space-y-1">
         <h2 className="text-xl font-bold tracking-tight text-[#1c1917]">安全审计报告管理</h2>
         <p className="text-sm text-[#78716c]">
-          系统每次安全审计完成后，均会自动生成符合行业标准的深度安全审计报告。支持一键导出为 PDF、Markdown 及 CSV 格式。
+          系统每次安全审计完成后，均会自动生成符合行业标准的深度安全审计报告。支持一键导出为 Markdown 格式。
         </p>
       </div>
 
       {/* 报告列表表格 */}
       <div className="bg-white border border-[#e7e5e4] rounded-xl p-6 shadow-[0_4px_20px_rgba(0,0,0,0.01)] space-y-4">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm text-left">
-            <thead>
-              <tr className="border-b border-[#e7e5e4] text-[#78716c] font-semibold text-xs uppercase">
-                <th className="py-3 px-4">报告 ID</th>
-                <th className="py-3 px-4">关联项目</th>
-                <th className="py-3 px-4">审计完成时间</th>
-                <th className="py-3 px-4">漏洞统计 (严重 / 高 / 中 / 低)</th>
-                <th className="py-3 px-4">合规评级</th>
-                <th className="py-3 px-4 text-right">操作</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#f5f5f4]">
-              {reports.map((r) => {
-                const totalVulns = r.vulnerabilityCount.critical + r.vulnerabilityCount.high + r.vulnerabilityCount.medium + r.vulnerabilityCount.low;
-                const isPassed = r.vulnerabilityCount.critical === 0 && r.vulnerabilityCount.high === 0;
-
-                return (
+        {reports.length === 0 ? (
+          <div className="text-center py-12 text-[#78716c]">
+            <FileText className="w-10 h-10 mx-auto mb-3 text-[#d6d3d1]" />
+            <p className="text-sm font-medium">暂无审计报告</p>
+            <p className="text-xs mt-1">完成一次安全扫描后，报告将自动生成</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead>
+                <tr className="border-b border-[#e7e5e4] text-[#78716c] font-semibold text-xs uppercase">
+                  <th className="py-3 px-4">报告 ID</th>
+                  <th className="py-3 px-4">关联项目</th>
+                  <th className="py-3 px-4">审计完成时间</th>
+                  <th className="py-3 px-4">漏洞统计 (严重 / 高 / 中 / 低)</th>
+                  <th className="py-3 px-4">合规评级</th>
+                  <th className="py-3 px-4 text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#f5f5f4]">
+                {reports.map((r) => (
                   <tr key={r.id} className="hover:bg-[#fafaf9] transition-colors">
                     <td className="py-4 px-4 font-mono text-xs font-bold text-blue-700">{r.id}</td>
                     <td className="py-4 px-4">
@@ -56,9 +104,11 @@ export default function Reports() {
                         <span className="font-semibold text-[#1c1917]">{r.projectName}</span>
                       </div>
                     </td>
-                    <td className="py-4 px-4 text-[#57534e] text-xs inline-flex items-center gap-1.5 mt-1">
-                      <Calendar className="w-3.5 h-3.5 text-stone-400" />
-                      {r.scanTime}
+                    <td className="py-4 px-4 text-[#57534e] text-xs">
+                      <div className="inline-flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-stone-400" />
+                        {new Date(r.scanTime).toLocaleString("zh-CN")}
+                      </div>
                     </td>
                     <td className="py-4 px-4">
                       <div className="flex items-center gap-1.5">
@@ -77,29 +127,29 @@ export default function Reports() {
                       </div>
                     </td>
                     <td className="py-4 px-4">
-                      {isPassed ? (
+                      {isPassed(r) ? (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs font-bold">
                           <CheckCircle2 className="w-3 h-3" />
-                          通过 (A+)
+                          通过 ({getGrade(r)})
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-50 border border-red-100 text-red-700 text-xs font-bold animate-pulse">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-50 border border-red-100 text-red-700 text-xs font-bold">
                           <AlertTriangle className="w-3 h-3" />
-                          整改中 (D-)
+                          整改中 ({getGrade(r)})
                         </span>
                       )}
                     </td>
                     <td className="py-4 px-4 text-right">
                       <div className="flex items-center justify-end gap-2">
                         <button 
-                          onClick={() => handleDownload(r.projectName)}
+                          onClick={() => handleDownload(r)}
                           className="p-1.5 border border-[#e7e5e4] hover:bg-white hover:text-blue-700 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1"
-                          title="下载 PDF 报告"
+                          title="下载 Markdown 报告"
                         >
                           <Download className="w-3.5 h-3.5" />
                         </button>
                         <button 
-                          onClick={() => toast.info(`正在跳转查看在线审计报告详情: ${r.fileUrl}`)}
+                          onClick={() => handlePreview(r)}
                           className="p-1.5 border border-[#e7e5e4] hover:bg-white hover:text-blue-700 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1"
                           title="在线预览"
                         >
@@ -108,12 +158,37 @@ export default function Reports() {
                       </div>
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
+
+      {/* 报告预览 Modal */}
+      {previewMd && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b border-[#e7e5e4]">
+              <h3 className="font-bold text-[#1c1917] flex items-center gap-2">
+                <FileText className="w-4 h-4 text-blue-600" />
+                {previewTitle}
+              </h3>
+              <button
+                onClick={() => setPreviewMd(null)}
+                className="p-1.5 hover:bg-[#f5f5f4] rounded-lg transition-colors"
+              >
+                <X className="w-4 h-4 text-[#78716c]" />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-6 flex-1">
+              <pre className="text-xs text-[#1c1917] whitespace-pre-wrap font-mono leading-relaxed">
+                {previewMd}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
