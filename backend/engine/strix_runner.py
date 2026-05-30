@@ -284,10 +284,41 @@ async def run_quick_scan_simulation(
     """
     import openai
 
-    api_key = openai_api_key or os.environ.get("OPENAI_API_KEY", "")
-    base_url = os.environ.get("OPENAI_BASE_URL", None)
+    # Load LLM config from settings (supports dynamic provider switching)
+    try:
+        from pathlib import Path as _Path
+        import json as _json
+        _settings_file = _Path(__file__).parent.parent.parent / "data" / "llm_settings.json"
+        if _settings_file.exists():
+            _settings = _json.loads(_settings_file.read_text(encoding="utf-8"))
+            _active_id = _settings.get("active_provider_id")
+            _providers = _settings.get("providers", [])
+            _active = next((p for p in _providers if p.get("id") == _active_id and p.get("enabled")), None)
+            if not _active:
+                _active = next((p for p in _providers if p.get("enabled")), None)
+            if _active and _active.get("api_key"):
+                _dyn_key = _active["api_key"]
+                _dyn_url = _active.get("base_url", "").rstrip("/")
+                if _dyn_url.endswith("/chat/completions"):
+                    _dyn_url = _dyn_url[:-len("/chat/completions")]
+                _dyn_model = _active.get("model", "gpt-4.1-mini")
+                api_key = openai_api_key or _dyn_key
+                base_url = _dyn_url or os.environ.get("OPENAI_BASE_URL", None)
+                _llm_model = _dyn_model
+            else:
+                api_key = openai_api_key or os.environ.get("OPENAI_API_KEY", "")
+                base_url = os.environ.get("OPENAI_BASE_URL", None)
+                _llm_model = os.environ.get("STRIX_LLM", "gpt-4.1-mini")
+        else:
+            api_key = openai_api_key or os.environ.get("OPENAI_API_KEY", "")
+            base_url = os.environ.get("OPENAI_BASE_URL", None)
+            _llm_model = os.environ.get("STRIX_LLM", "gpt-4.1-mini")
+    except Exception:
+        api_key = openai_api_key or os.environ.get("OPENAI_API_KEY", "")
+        base_url = os.environ.get("OPENAI_BASE_URL", None)
+        _llm_model = os.environ.get("STRIX_LLM", "gpt-4.1-mini")
 
-    client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+    client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url or None)
 
     yield {"type": "log", "data": f"[*] 初始化 AI 漏洞挖掘引擎 (模式: {scan_mode})..."}
     yield {"type": "log", "data": f"[*] 目标: {target}"}
@@ -295,16 +326,22 @@ async def run_quick_scan_simulation(
     await asyncio.sleep(0.3)
     yield {"type": "log", "data": "[*] 正在执行静态数据流分析 (Tree-sitter)..."}
     await asyncio.sleep(0.3)
-    yield {"type": "log", "data": "[*] 正在调用 AI 大模型进行语义推理..."}
+    yield {"type": "log", "data": f"[*] 正在调用 AI 大模型进行语义推理 (模型: {_llm_model})..."}
 
     # Build the prompt
+    # Sanitize code: limit size and remove problematic characters
     if code:
+        # Truncate to avoid token limits and JSON issues
+        MAX_CODE = 40000
+        code_for_prompt = code[:MAX_CODE]
+        if len(code) > MAX_CODE:
+            code_for_prompt += f"\n... (truncated, total {len(code)} chars)"
         prompt_content = f"""You are a professional security researcher performing a vulnerability assessment.
 
 Analyze the following {language} code for security vulnerabilities:
 
 ```{language.lower()}
-{code}
+{code_for_prompt}
 ```
 
 For each vulnerability found, provide:
@@ -355,22 +392,62 @@ Perform a security assessment and identify potential vulnerabilities including:
 
 Respond in JSON format with the same structure as a penetration test report."""
 
+    def _safe_parse_json(text: str) -> dict:
+        """Try multiple strategies to parse JSON from LLM response."""
+        import re as _re
+        # Strategy 1: direct parse
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+        # Strategy 2: extract first {...} block
+        try:
+            match = _re.search(r'\{[\s\S]*\}', text)
+            if match:
+                return json.loads(match.group(0))
+        except Exception:
+            pass
+        # Strategy 3: fix common issues (unescaped newlines in strings)
+        try:
+            fixed = _re.sub(r'(?<!\\)\n', '\\n', text)
+            return json.loads(fixed)
+        except Exception:
+            pass
+        # Strategy 4: return empty structure
+        return {"vulnerabilities": [], "executive_summary": text[:500]}
+
+    # Try with json_object format first, fall back to text if not supported
     try:
         response = await client.chat.completions.create(
-            model=os.environ.get("STRIX_LLM", "gpt-4.1-mini"),
+            model=_llm_model,
             messages=[
                 {
                     "role": "system",
-                    "content": "You are an expert security researcher. Always respond with valid JSON.",
+                    "content": "You are an expert security researcher. Always respond with valid JSON only, no markdown code blocks.",
                 },
                 {"role": "user", "content": prompt_content},
             ],
             response_format={"type": "json_object"},
             temperature=0.1,
         )
+    except Exception as _fmt_err:
+        # Fallback: some providers don't support response_format
+        logger.warning("json_object format not supported, falling back to text: %s", _fmt_err)
+        response = await client.chat.completions.create(
+            model=_llm_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert security researcher. Always respond with valid JSON only, no markdown code blocks, no extra text.",
+                },
+                {"role": "user", "content": prompt_content},
+            ],
+            temperature=0.1,
+        )
 
+    try:
         result_text = response.choices[0].message.content or "{}"
-        result_data = json.loads(result_text)
+        result_data = _safe_parse_json(result_text)
 
         vulns = result_data.get("vulnerabilities", [])
         yield {"type": "log", "data": f"[+] AI 语义推理完成，发现 {len(vulns)} 个潜在漏洞"}

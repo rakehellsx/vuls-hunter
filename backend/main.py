@@ -24,6 +24,8 @@ from .api import (
     reports_router,
     rules_router,
     scans_router,
+    settings_router,
+    upload_router,
 )
 from .db import init_db
 
@@ -69,6 +71,8 @@ app.include_router(scans_router)
 app.include_router(projects_router)
 app.include_router(rules_router)
 app.include_router(reports_router)
+app.include_router(settings_router)
+app.include_router(upload_router)
 
 
 @app.get("/api/health")

@@ -30,7 +30,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     { id: "reports", label: "报告管理", icon: FileText },
     { id: "engine", label: "引擎管理", icon: Cpu },
     { id: "audit", label: "日志审计", icon: History },
-    { id: "settings", label: "系统管理", icon: Settings },
+    { id: "settings", label: "LLM 设置", icon: Settings },
   ];
 
   return (
