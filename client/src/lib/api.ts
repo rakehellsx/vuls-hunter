@@ -18,6 +18,9 @@ export interface ApiVulnerability {
   impact: string;
   remediation: string;
   proof_of_concept: string;
+  poc_description: string | null;
+  poc_script_code: string | null;
+  poc_generated_at: string | null;
   cwe: string | null;
   file_path: string | null;
   start_line: number | null;
@@ -148,6 +151,23 @@ export const scansApi = {
       `/scans/${scanId}/vulnerabilities/${vulnId}?status=${status}`,
       { method: "PATCH" }
     ),
+
+  generatePoc: (scanId: number, vulnId: number) =>
+    request<{
+      success: boolean;
+      cached: boolean;
+      poc_description: string;
+      poc_script_code: string;
+      poc_generated_at: string;
+    }>(`/scans/${scanId}/vulnerabilities/${vulnId}/poc`, { method: "POST" }),
+
+  getPoc: (scanId: number, vulnId: number) =>
+    request<{
+      has_poc: boolean;
+      poc_description: string | null;
+      poc_script_code: string | null;
+      poc_generated_at: string | null;
+    }>(`/scans/${scanId}/vulnerabilities/${vulnId}/poc`),
 };
 
 // ─────────────────────────────────────────────

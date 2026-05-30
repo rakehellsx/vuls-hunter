@@ -102,6 +102,9 @@ class Vulnerability(Base):
     impact: Mapped[str | None] = mapped_column(Text, nullable=True)
     remediation: Mapped[str | None] = mapped_column(Text, nullable=True)
     proof_of_concept: Mapped[str | None] = mapped_column(Text, nullable=True)
+    poc_description: Mapped[str | None] = mapped_column(Text, nullable=True)   # Strix PoC description
+    poc_script_code: Mapped[str | None] = mapped_column(Text, nullable=True)   # Strix PoC executable script
+    poc_generated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # When PoC was generated
     cvss_score: Mapped[float | None] = mapped_column(nullable=True)
     cwe: Mapped[str | None] = mapped_column(String(64), nullable=True)
     file_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)

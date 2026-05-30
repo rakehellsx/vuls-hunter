@@ -39,6 +39,10 @@ export interface Vulnerability {
   suggestedFix: string;
   fixedCode: string;
   status: "unresolved" | "fixed" | "ignored";
+  // PoC fields
+  pocDescription?: string | null;
+  pocScriptCode?: string | null;
+  pocGeneratedAt?: string | null;
   // Backend fields
   _backendId?: number;
   _scanId?: number;
@@ -182,6 +186,9 @@ function mapApiVuln(v: ApiVulnerability, scanId?: number): Vulnerability {
     suggestedFix: v.remediation || "",
     fixedCode: v.fix_after || "",
     status: (v.status as "unresolved" | "fixed" | "ignored") || "unresolved",
+    pocDescription: v.poc_description || null,
+    pocScriptCode: v.poc_script_code || null,
+    pocGeneratedAt: v.poc_generated_at || null,
   };
 }
 

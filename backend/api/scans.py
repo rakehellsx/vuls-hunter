@@ -183,7 +183,7 @@ async def _save_vulnerabilities(
             scan_id=scan_id,
             vuln_id=f"VULN-{scan_id:04d}-{i+1:03d}",
             title=vuln_data.get("title", "Unknown Vulnerability"),
-            severity=vuln_data.get("severity", "medium"),
+            severity=vuln_data.get("severity", "medium").lower(),
             description=vuln_data.get("description", ""),
             impact=vuln_data.get("impact", ""),
             remediation=vuln_data.get("remediation", ""),
@@ -321,6 +321,9 @@ async def get_scan(scan_id: int, db: AsyncSession = Depends(get_db)) -> Any:
                 "impact": v.impact,
                 "remediation": v.remediation,
                 "proof_of_concept": v.proof_of_concept,
+                "poc_description": v.poc_description,
+                "poc_script_code": v.poc_script_code,
+                "poc_generated_at": v.poc_generated_at.isoformat() if v.poc_generated_at else None,
                 "cwe": v.cwe,
                 "file_path": v.file_path,
                 "start_line": v.start_line,
@@ -409,3 +412,223 @@ async def update_vulnerability_status(
     db.add(log)
     await db.commit()
     return {"success": True, "status": status}
+
+
+# ---------------------------------------------------------------------------
+# PoC Generation API
+# ---------------------------------------------------------------------------
+
+@router.post("/{scan_id}/vulnerabilities/{vuln_id}/poc")
+async def generate_poc(
+    scan_id: int,
+    vuln_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """
+    Generate a Proof-of-Concept (PoC) for a specific vulnerability using the AI engine.
+    This leverages Strix's PoC generation capability via DeepSeek/OpenAI.
+    """
+    import openai
+    import json as _json
+    from pathlib import Path as _Path
+    from datetime import datetime as _dt
+
+    # 1. Load vulnerability from DB
+    result = await db.execute(
+        select(Vulnerability).where(
+            Vulnerability.id == vuln_id,
+            Vulnerability.scan_id == scan_id,
+        )
+    )
+    vuln = result.scalar_one_or_none()
+    if not vuln:
+        raise HTTPException(status_code=404, detail="Vulnerability not found")
+
+    # 2. If PoC already generated, return cached version
+    if vuln.poc_script_code:
+        return {
+            "success": True,
+            "cached": True,
+            "poc_description": vuln.poc_description,
+            "poc_script_code": vuln.poc_script_code,
+            "poc_generated_at": vuln.poc_generated_at.isoformat() if vuln.poc_generated_at else None,
+        }
+
+    # 3. Load LLM config (same logic as strix_runner)
+    try:
+        _settings_file = _Path(__file__).parent.parent.parent / "data" / "llm_settings.json"
+        if _settings_file.exists():
+            _settings = _json.loads(_settings_file.read_text(encoding="utf-8"))
+            _active_id = _settings.get("active_provider_id")
+            _providers = _settings.get("providers", [])
+            _active = next((p for p in _providers if p.get("id") == _active_id and p.get("enabled")), None)
+            if not _active:
+                _active = next((p for p in _providers if p.get("enabled")), None)
+            if _active and _active.get("api_key"):
+                _dyn_url = _active.get("base_url", "").rstrip("/")
+                if _dyn_url.endswith("/chat/completions"):
+                    _dyn_url = _dyn_url[:-len("/chat/completions")]
+                api_key = _active["api_key"]
+                base_url = _dyn_url or None
+                model_name = _active.get("model", "gpt-4.1-mini")
+            else:
+                raise ValueError("No active provider")
+        else:
+            raise ValueError("No settings file")
+    except Exception:
+        import os as _os
+        api_key = _os.environ.get("OPENAI_API_KEY", "")
+        base_url = _os.environ.get("OPENAI_BASE_URL", None)
+        model_name = "gpt-4.1-mini"
+
+    # 4. Build PoC generation prompt (Strix-style)
+    vuln_context = f"""Vulnerability Details:
+- Title: {vuln.title}
+- Severity: {vuln.severity.value.upper()}
+- CWE: {vuln.cwe or "N/A"}
+- Description: {vuln.description or "N/A"}
+- Impact: {vuln.impact or "N/A"}
+- File: {vuln.file_path or "N/A"}
+- Lines: {vuln.start_line or "N/A"} - {vuln.end_line or "N/A"}
+- Vulnerable Code:
+```
+{vuln.code_snippet or vuln.fix_before or "N/A"}
+```
+- Remediation: {vuln.remediation or "N/A"}"""
+
+    poc_prompt = f"""You are a professional penetration tester and security researcher.
+Your task is to generate a complete, executable Proof-of-Concept (PoC) for the following vulnerability.
+
+{vuln_context}
+
+Generate a PoC that:
+1. Demonstrates the vulnerability is real and exploitable
+2. Shows the attack vector clearly
+3. Is safe to run in a controlled test environment
+4. Includes comments explaining each step
+
+Respond with valid JSON only (no markdown code blocks):
+{{
+  "poc_description": "A clear, step-by-step explanation of how this vulnerability can be exploited, what conditions are needed, and what the attacker can achieve. Include: attack prerequisites, exploitation steps, expected outcome.",
+  "poc_script_code": "Complete executable PoC script (Python preferred). Include: imports, setup, attack payload, verification of success. Add detailed comments.",
+  "attack_type": "The attack category (e.g. SQL Injection, XSS, Command Injection, IDOR, etc.)",
+  "prerequisites": "What the attacker needs (e.g. valid user account, network access, etc.)",
+  "impact_demo": "What the PoC demonstrates (e.g. extracts admin password hash, executes arbitrary commands, etc.)",
+  "detection_evasion": "How this attack might evade detection",
+  "mitigation_test": "How to verify the fix works after patching"
+}}"""
+
+    # 5. Call LLM
+    try:
+        client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url or None)
+        try:
+            response = await client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert penetration tester. Generate detailed, executable PoC code. Always respond with valid JSON only.",
+                    },
+                    {"role": "user", "content": poc_prompt},
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.2,
+            )
+        except Exception:
+            response = await client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert penetration tester. Generate detailed, executable PoC code. Always respond with valid JSON only, no markdown.",
+                    },
+                    {"role": "user", "content": poc_prompt},
+                ],
+                temperature=0.2,
+            )
+
+        result_text = response.choices[0].message.content or "{}"
+
+        # Parse JSON with fallback
+        import re as _re
+        poc_data: dict = {}
+        for strategy in [
+            lambda t: _json.loads(t),
+            lambda t: _json.loads(_re.search(r'\{[\s\S]*\}', t).group(0)),  # type: ignore
+        ]:
+            try:
+                poc_data = strategy(result_text)
+                break
+            except Exception:
+                continue
+
+        poc_description = poc_data.get("poc_description", "")
+        poc_script_code = poc_data.get("poc_script_code", "")
+
+        # Enrich description with extra fields
+        extra_info = []
+        if poc_data.get("attack_type"):
+            extra_info.append(f"**攻击类型**: {poc_data['attack_type']}")
+        if poc_data.get("prerequisites"):
+            extra_info.append(f"**前置条件**: {poc_data['prerequisites']}")
+        if poc_data.get("impact_demo"):
+            extra_info.append(f"**演示效果**: {poc_data['impact_demo']}")
+        if poc_data.get("detection_evasion"):
+            extra_info.append(f"**检测规避**: {poc_data['detection_evasion']}")
+        if poc_data.get("mitigation_test"):
+            extra_info.append(f"**修复验证**: {poc_data['mitigation_test']}")
+        if extra_info:
+            poc_description = poc_description + "\n\n---\n" + "\n\n".join(extra_info)
+
+        # 6. Save to DB
+        vuln.poc_description = poc_description
+        vuln.poc_script_code = poc_script_code
+        vuln.poc_generated_at = _dt.utcnow()
+
+        log = AuditLog(
+            action=f"PoC 生成: {vuln.title[:60]}",
+            level="info",
+            details=f"scan_id={scan_id}, vuln_id={vuln_id}, model={model_name}",
+        )
+        db.add(log)
+        await db.commit()
+
+        return {
+            "success": True,
+            "cached": False,
+            "poc_description": poc_description,
+            "poc_script_code": poc_script_code,
+            "poc_generated_at": vuln.poc_generated_at.isoformat(),
+        }
+
+    except Exception as exc:
+        logger.exception("PoC generation failed for vuln %d", vuln_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"PoC generation failed: {str(exc)}"
+        )
+
+
+@router.get("/{scan_id}/vulnerabilities/{vuln_id}/poc")
+async def get_poc(
+    scan_id: int,
+    vuln_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Get existing PoC for a vulnerability (if already generated)."""
+    result = await db.execute(
+        select(Vulnerability).where(
+            Vulnerability.id == vuln_id,
+            Vulnerability.scan_id == scan_id,
+        )
+    )
+    vuln = result.scalar_one_or_none()
+    if not vuln:
+        raise HTTPException(status_code=404, detail="Vulnerability not found")
+
+    return {
+        "has_poc": bool(vuln.poc_script_code),
+        "poc_description": vuln.poc_description,
+        "poc_script_code": vuln.poc_script_code,
+        "poc_generated_at": vuln.poc_generated_at.isoformat() if vuln.poc_generated_at else None,
+    }

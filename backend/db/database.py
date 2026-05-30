@@ -30,7 +30,29 @@ async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database initialized at %s", DB_PATH)
+    # Run schema migrations for new columns (idempotent)
+    await _migrate_schema()
     await _seed_default_rules()
+
+
+async def _migrate_schema() -> None:
+    """Apply incremental schema migrations (idempotent ALTER TABLE)."""
+    import aiosqlite
+    async with aiosqlite.connect(str(DB_PATH)) as db:
+        # Get existing columns in vulnerabilities table
+        async with db.execute("PRAGMA table_info(vulnerabilities)") as cursor:
+            cols = {row[1] async for row in cursor}
+        # Add PoC columns if missing
+        new_cols = [
+            ("poc_description", "TEXT"),
+            ("poc_script_code", "TEXT"),
+            ("poc_generated_at", "DATETIME"),
+        ]
+        for col_name, col_type in new_cols:
+            if col_name not in cols:
+                await db.execute(f"ALTER TABLE vulnerabilities ADD COLUMN {col_name} {col_type}")
+                logger.info("Schema migration: added column vulnerabilities.%s", col_name)
+        await db.commit()
 
 
 async def _seed_default_rules() -> None:
