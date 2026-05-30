@@ -76,6 +76,14 @@ export interface ChatMessage {
   suggestions?: string[];
 }
 
+export interface ChatSession {
+  id: string;
+  title: string;
+  lastMessage: string;
+  time: string;
+  messages: ChatMessage[];
+}
+
 interface AppContextType {
   projects: Project[];
   activeProjectId: string | null;
@@ -106,7 +114,11 @@ interface AppContextType {
     vulnerabilities: Vulnerability[];
     code: string;
   };
-  chatMessages: ChatMessage[];
+  chatSessions: ChatSession[];
+  activeSessionId: string;
+  setActiveSessionId: (id: string) => void;
+  createNewSession: () => void;
+  deleteSession: (id: string) => void;
   sendChatMessage: (text: string) => void;
   isChatTyping: boolean;
 }
@@ -328,20 +340,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     code: ""
   });
 
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([
     {
-      id: "MSG-001",
-      sender: "ai",
-      text: "您好！我是您的 AI 漏洞挖掘专属助手。您可以向我下达漏洞审计指令，或者让我协助您引导引擎进行特定漏洞的深入挖掘。\n\n例如：\n1. 帮我扫描 Secured-Payment-Gateway 项目中的越权漏洞。\n2. 引导引擎对 api/users.py 进行二次注入深度审计。\n3. 分析当前 AI-Chat-Agent 生态中的提示词注入风险。",
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      suggestions: [
-        "审计 Secured-Payment-Gateway 越权漏洞",
-        "深度分析 AI-Chat-Agent 提示词注入风险",
-        "查看最新规则库配置"
+      id: "SESS-001",
+      title: "Secured-Payment-Gateway 越权审计",
+      lastMessage: "已发现位于 CheckoutService.java 第 89 行的支付参数篡改漏洞...",
+      time: "10:24",
+      messages: [
+        {
+          id: "MSG-001",
+          sender: "ai",
+          text: "您好！我是您的 AI 漏洞挖掘专属助手。您可以向我下达漏洞审计指令，或者让我协助您引导引擎进行特定漏洞的深入挖掘。\n\n例如：\n1. 帮我扫描 Secured-Payment-Gateway 项目中的越权漏洞。\n2. 引导引擎对 api/users.py 进行二次注入深度审计。\n3. 分析当前 AI-Chat-Agent 生态中的提示词注入风险。",
+          time: "10:20",
+          suggestions: [
+            "审计 Secured-Payment-Gateway 越权漏洞",
+            "深度分析 AI-Chat-Agent 提示词注入风险",
+            "查看最新规则库配置"
+          ]
+        }
+      ]
+    },
+    {
+      id: "SESS-002",
+      title: "AI-Chat-Agent 提示词注入分析",
+      lastMessage: "在 shell_executor.py 第 18 行，智能体直接调用本地 shell 存在风险...",
+      time: "昨天",
+      messages: [
+        {
+          id: "MSG-101",
+          sender: "ai",
+          text: "针对 AI-Chat-Agent 项目的智能体生态审计，大模型已经锁定了潜在的提示词注入和任意命令执行风险。是否需要我为您生成高隔离沙箱的防护补丁？",
+          time: "昨天"
+        }
       ]
     }
   ]);
+  const [activeSessionId, setActiveSessionId] = useState<string>("SESS-001");
   const [isChatTyping, setIsChatTyping] = useState(false);
+
+  // Create new session
+  const createNewSession = () => {
+    const newSession: ChatSession = {
+      id: `SESS-${Date.now()}`,
+      title: "新建挖掘会话",
+      lastMessage: "等待下达漏洞审计指令...",
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      messages: [
+        {
+          id: `MSG-${Date.now()}`,
+          sender: "ai",
+          text: "新会话已创建。请输入需要审计的项目名称或具体的代码段引导指令，我将立即为您调度 AI 分析内核。",
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }
+      ]
+    };
+    setChatSessions(prev => [newSession, ...prev]);
+    setActiveSessionId(newSession.id);
+    toast.success("已创建全新 AI 漏洞挖掘引导会话");
+  };
+
+  // Delete session
+  const deleteSession = (id: string) => {
+    setChatSessions(prev => {
+      const filtered = prev.filter(s => s.id !== id);
+      if (activeSessionId === id && filtered.length > 0) {
+        setActiveSessionId(filtered[0].id);
+      }
+      return filtered;
+    });
+    toast.info("会话已删除");
+  };
 
   // Toggle integrations
   const toggleIntegration = (key: "git" | "jenkins" | "jira" | "vscode" | "dingtalk") => {
@@ -655,7 +723,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
-    setChatMessages(prev => [...prev, userMsg]);
+    // Add user message to active session
+    setChatSessions(prev => prev.map(sess => {
+      if (sess.id === activeSessionId) {
+        return {
+          ...sess,
+          lastMessage: text.substring(0, 40) + (text.length > 40 ? "..." : ""),
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          messages: [...sess.messages, userMsg]
+        };
+      }
+      return sess;
+    }));
     setIsChatTyping(true);
 
     // AI Response Logic
@@ -686,7 +765,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         suggestions: suggestions.length > 0 ? suggestions : undefined
       };
 
-      setChatMessages(prev => [...prev, aiMsg]);
+      // Add AI response to active session
+      setChatSessions(prev => prev.map(sess => {
+        if (sess.id === activeSessionId) {
+          // Update title if it was the default new session title
+          const title = sess.title === "新建挖掘会话" ? text.substring(0, 15) + (text.length > 15 ? "..." : "") : sess.title;
+          return {
+            ...sess,
+            title,
+            lastMessage: aiText.substring(0, 40) + (aiText.length > 40 ? "..." : ""),
+            messages: [...sess.messages, aiMsg]
+          };
+        }
+        return sess;
+      }));
+
       setIsChatTyping(false);
       addAuditLog(`AI 对话引导指令: ${text.substring(0, 20)}...`);
     }, 1500);
@@ -713,7 +806,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleIntegration,
         triggerQuickScan,
         quickScanResult,
-        chatMessages,
+        chatSessions,
+        activeSessionId,
+        setActiveSessionId,
+        createNewSession,
+        deleteSession,
         sendChatMessage,
         isChatTyping
       }}
