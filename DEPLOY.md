@@ -32,7 +32,7 @@ Vuls-Hunter 采用前后端分离架构，由以下三个核心服务组成：
 ```bash
 git clone https://github.com/rakehellsx/vuls-hunter.git
 cd vuls-hunter
-git checkout dev
+git checkout dev2
 ```
 
 ### 2.3 安装后端依赖
@@ -219,6 +219,7 @@ curl -X PUT http://localhost:8000/api/settings/llm \
 | `/api/projects/upload-archive` | POST | 上传压缩包创建项目 |
 | `/api/scans/quick` | POST | 快速代码扫描 |
 | `/api/scans/{id}/ws` | WebSocket | 实时扫描日志流 |
+| `/api/scans/{scan_id}/vulnerabilities/{vuln_id}/poc` | POST/GET | 生成/获取漏洞利用 PoC |
 | `/api/upload/url` | POST | URL/GitHub 仓库分析 |
 | `/api/upload/archive` | POST | 上传压缩包分析 |
 | `/api/reports/` | GET | 报告列表 |
@@ -303,4 +304,5 @@ cp backend/data/vuls_hunter.db backup/vuls_hunter_$(date +%Y%m%d).db
 | 版本 | 分支 | 说明 |
 |------|------|------|
 | v1.0 (原型) | `main` | 纯前端原型，数据全部为模拟数据 |
-| v2.0 (当前) | `dev` | 全栈实现，集成 Strix 引擎，真实 AI 漏洞挖掘 |
+| v2.0 | `dev` | 全栈实现，集成 Strix 引擎，真实 AI 漏洞挖掘 |
+| v2.1 (当前) | `dev2` | 新增 PoC 自动生成功能，修复 WebSocket 快速检测时序 Bug |
