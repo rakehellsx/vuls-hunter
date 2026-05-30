@@ -120,8 +120,8 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
           </div>
         </header>
 
-        {/* 页面主内容 - 调整最大宽度至 max-w-[1400px] (从 max-w-7xl) 更好地利用屏幕宽度，解决左侧空白过多的问题 */}
-        <main className="flex-1 p-8 overflow-y-auto max-w-[1400px] w-full mx-auto">
+        {/* 页面主内容 - 移除 mx-auto 居中，改为左对齐（紧贴侧边栏），并采用 w-full 撑满宽度，彻底消除左侧空白 */}
+        <main className="flex-1 p-8 overflow-y-auto w-full">
           {children}
         </main>
       </div>
