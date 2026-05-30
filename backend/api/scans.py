@@ -127,6 +127,8 @@ async def _run_scan_task(
 
     logs: list[str] = []
     final_result: dict[str, Any] | None = None
+    # Buffer the finished event so we can save DB first
+    finished_event: dict[str, Any] | None = None
 
     try:
         async for event in run_quick_scan_simulation(
@@ -135,14 +137,17 @@ async def _run_scan_task(
             language=language,
             scan_mode=scan_mode,
         ):
-            await log_queue.put(event)
             if event["type"] == "log":
                 logs.append(event["data"])
+                await log_queue.put(event)
             elif event["type"] == "finished":
                 if event.get("result"):
                     final_result = event["result"]
+                finished_event = event
+            else:
+                await log_queue.put(event)
 
-        # Save results to database
+        # Save results to database BEFORE sending finished event
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(Scan).where(Scan.id == scan_id))
             scan = result.scalar_one_or_none()
@@ -155,6 +160,10 @@ async def _run_scan_task(
                 if final_result:
                     await _save_vulnerabilities(db, scan_id, final_result)
                     await _save_report(db, scan_id, scan, final_result)
+
+        # Now send the finished event after DB is committed
+        if finished_event:
+            await log_queue.put(finished_event)
 
     except Exception as exc:
         logger.exception("Scan %d failed", scan_id)
