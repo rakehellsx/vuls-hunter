@@ -10,7 +10,6 @@ import {
   Settings, 
   History, 
   Cpu, 
-  LogOut,
   Bell,
   Sparkles
 } from "lucide-react";
@@ -84,13 +83,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               <p className="text-xs text-[#78716c] truncate">admin@manus.security</p>
             </div>
           </div>
-          <button 
-            onClick={() => window.location.reload()}
-            className="w-full mt-3 flex items-center justify-center gap-2 px-3 py-2 border border-[#e7e5e4] rounded-lg text-xs font-semibold text-[#57534e] hover:bg-white hover:text-red-600 transition-colors"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            重载系统原型
-          </button>
         </div>
       </aside>
 
@@ -103,7 +95,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
               V3.0.0 PRO
             </span>
             <div className="h-4 w-[1px] bg-[#e7e5e4]"></div>
-            <p className="text-xs text-[#78716c] font-medium">当前节点：新加坡 AI 漏洞分析超算集群-1</p>
+            <p className="text-xs text-[#78716c] font-medium">AI 漏洞挖掘平台</p>
           </div>
 
           <div className="flex items-center gap-4">
