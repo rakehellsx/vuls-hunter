@@ -555,9 +555,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const fixVulnerability = useCallback(async (projectId: string, vulnId: string) => {
     const project = projects.find((p) => p.id === projectId);
     const vuln = project?.vulnerabilities.find((v) => v.id === vulnId);
-    if (!vuln?._backendId) return;
+    if (!vuln?._backendId || !vuln?._scanId) return;
     try {
-      await scansApi.updateVulnerability(vuln._backendId, "fixed");
+      await scansApi.updateVulnStatus(vuln._scanId, vuln._backendId, "fixed");
       setProjects((prev) =>
         prev.map((p) =>
           p.id === projectId
@@ -579,9 +579,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const ignoreVulnerability = useCallback(async (projectId: string, vulnId: string) => {
     const project = projects.find((p) => p.id === projectId);
     const vuln = project?.vulnerabilities.find((v) => v.id === vulnId);
-    if (!vuln?._backendId) return;
+    if (!vuln?._backendId || !vuln?._scanId) return;
     try {
-      await scansApi.updateVulnerability(vuln._backendId, "ignored");
+      await scansApi.updateVulnStatus(vuln._scanId, vuln._backendId, "ignored");
       setProjects((prev) =>
         prev.map((p) =>
           p.id === projectId
@@ -647,10 +647,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const triggerQuickScan = useCallback(async (code: string, lang: string) => {
     setQuickScanResult({ status: "scanning", logs: ["初始化快速扫描..."], vulnerabilities: [], code });
     try {
-      const scan = await scansApi.create({
+      const scan = await scansApi.startQuick({
         target: `inline-${lang}-snippet`,
+        code,
+        language: lang,
         scan_mode: "quick",
-        is_whitebox: true,
         instruction: code,
       });
       const scanId = scan.id;
