@@ -59,10 +59,17 @@ def _extract_archive(archive_path: Path, extract_dir: Path) -> None:
     elif ".tar" in suffix or suffix in (".tgz",):
         mode = "r:*"
         with tarfile.open(archive_path, mode) as tf:
-            for member in tf.getmembers():
-                if ".." in member.name or member.name.startswith("/"):
-                    continue
-            tf.extractall(extract_dir, filter="data")
+            # Filter out unsafe members (path traversal protection)
+            safe_members = [
+                m for m in tf.getmembers()
+                if ".." not in m.name and not m.name.startswith("/")
+            ]
+            # Python 3.12+ supports filter="data", use safe_members for older versions
+            import sys as _sys
+            if _sys.version_info >= (3, 12):
+                tf.extractall(extract_dir, members=safe_members, filter="data")
+            else:
+                tf.extractall(extract_dir, members=safe_members)
     else:
         raise ValueError(f"Unsupported archive format: {suffix}")
 
@@ -164,6 +171,79 @@ async def _download_generic_url(url: str, target_dir: Path) -> str:
 # ─────────────────────────────────────────────
 # Routes
 # ─────────────────────────────────────────────
+
+@router.post("/archive-for-chat")
+async def upload_archive_for_chat(
+    file: UploadFile = File(...),
+) -> Any:
+    """
+    Upload a zip/tar archive for chat-based vulnerability analysis.
+    Only extracts code content, does NOT create a scan task.
+    Returns code_content directly for OpenCode analysis.
+    """
+    # Validate file size
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail=f"文件过大，最大支持 {MAX_UPLOAD_SIZE // 1024 // 1024}MB")
+
+    # Validate extension
+    filename = file.filename or "upload.zip"
+    suffix = Path(filename).suffix.lower()
+    name_lower = filename.lower()
+    is_archive = (
+        suffix in {".zip", ".tar", ".tgz"}
+        or name_lower.endswith(".tar.gz")
+        or name_lower.endswith(".tar.bz2")
+        or name_lower.endswith(".tar.xz")
+    )
+    if not is_archive:
+        raise HTTPException(
+            status_code=400,
+            detail="仅支持 .zip / .tar / .tar.gz / .tgz 格式的压缩包"
+        )
+
+    # Save to temp dir
+    tmp_dir = Path(tempfile.mkdtemp(dir=UPLOAD_DIR))
+    archive_path = tmp_dir / filename
+    archive_path.write_bytes(content)
+
+    # Extract
+    extract_dir = tmp_dir / "extracted"
+    extract_dir.mkdir()
+    try:
+        _extract_archive(archive_path, extract_dir)
+    except Exception as exc:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail=f"解压失败: {exc}")
+
+    # Collect code
+    combined_code, file_list = _collect_code_files(extract_dir)
+    if not combined_code:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise HTTPException(status_code=400, detail="压缩包中未找到可分析的代码文件")
+
+    # Detect primary language
+    language = _detect_language(file_list)
+
+    # Cleanup temp dir after a delay
+    asyncio.create_task(_cleanup_later(tmp_dir, delay=300))
+
+    # Extract project name from archive filename
+    project_name = Path(filename).stem
+    # Remove common suffixes like -0.9.0-alpha, .tar, etc.
+    import re
+    project_name = re.sub(r'[-_]v?\d+\..*$', '', project_name) or project_name
+
+    return {
+        "status": "ok",
+        "project_name": project_name,
+        "file_count": len(file_list),
+        "language": language,
+        "files_analyzed": file_list[:20],
+        "code_content": combined_code,
+        "message": f"已提取 {len(file_list)} 个代码文件（{language}），准备开始 AI 安全审计...",
+    }
+
 
 @router.post("/archive")
 async def upload_archive(

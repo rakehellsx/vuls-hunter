@@ -54,21 +54,19 @@ interface CodeContext {
 
 async function uploadArchiveForChat(
   file: File,
-  scanMode: string
-): Promise<{ code: string; fileCount: number; language: string; filesAnalyzed: string[]; scanId: number }> {
+  _scanMode: string
+): Promise<{ code: string; fileCount: number; language: string; filesAnalyzed: string[]; projectName: string }> {
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("scan_mode", scanMode);
-  formData.append("instruction", `对压缩包 ${file.name} 进行全面安全审计，重点挖掘高危漏洞`);
 
-  const resp = await fetch("/api/upload/archive", { method: "POST", body: formData });
+  // Use the dedicated chat-only endpoint (no scan task created)
+  const resp = await fetch("/api/upload/archive-for-chat", { method: "POST", body: formData });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: "上传失败" }));
     throw new Error(err.detail || "上传失败");
   }
   const data = await resp.json();
   const filesAnalyzed: string[] = data.files_analyzed || [];
-  // Use full code content returned by backend for OpenCode analysis
   const codeContent = data.code_content || [
     `# 代码包: ${file.name}`,
     `# 语言: ${data.language}`,
@@ -81,7 +79,7 @@ async function uploadArchiveForChat(
     fileCount: data.file_count,
     language: data.language,
     filesAnalyzed,
-    scanId: data.scan_id,
+    projectName: data.project_name || file.name,
   };
 }
 
