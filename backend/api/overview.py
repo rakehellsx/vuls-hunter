@@ -187,29 +187,55 @@ async def _send_to_opencode(
     oc_session_id: str,
     message_text: str,
     hclient: Any,
+    model_id: str | None = None,
+    provider_id: str | None = None,
 ) -> str:
-    """Send a message to OpenCode and extract the text response."""
+    """Send a message to OpenCode and extract the text response.
+
+    Does NOT hardcode providerID/modelID — uses OpenCode Server's default
+    model configuration unless explicitly specified.
+    """
+    payload: dict = {
+        "parts": [{"type": "text", "text": message_text}],
+    }
+    # Only pass model field if explicitly configured; otherwise let OpenCode
+    # use its own default model (avoids 401/provider-not-found errors)
+    if provider_id and model_id:
+        payload["model"] = {"providerID": provider_id, "modelID": model_id}
+
     msg_resp = await hclient.post(
         f"{server_url}/session/{oc_session_id}/message",
-        json={
-            "parts": [{"type": "text", "text": message_text}],
-            "model": {
-                "providerID": "openai",
-                "modelID": "gpt-4.1-mini",
-            },
-        },
+        json=payload,
         headers={"Content-Type": "application/json"},
         timeout=180.0,
     )
     msg_resp.raise_for_status()
     msg_data = msg_resp.json()
 
+    # Extract text from parts array
     ai_text = ""
     for part in msg_data.get("parts", []):
         if part.get("type") == "text":
             ai_text += part.get("text", "")
 
-    return ai_text or "OpenCode 已处理请求，但未返回文本内容。"
+    if ai_text:
+        return ai_text
+
+    # parts is empty — check info.error for the real error reason
+    info = msg_data.get("info") or {}
+    error = info.get("error") or {}
+    if error:
+        err_name = error.get("name", "UnknownError")
+        err_data = error.get("data") or {}
+        err_msg = err_data.get("message") or str(error)
+        status_code = err_data.get("statusCode", "")
+        raise RuntimeError(
+            f"OpenCode LLM 调用失败 [{err_name}] "
+            f"{'(HTTP ' + str(status_code) + ') ' if status_code else ''}"
+            f"{err_msg}"
+        )
+
+    return "OpenCode 已处理请求，但未返回文本内容。"
 
 
 @router.post("/api/chat")
@@ -272,6 +298,7 @@ async def chat_with_agent(
             headers["Authorization"] = f"Bearer {api_key}"
         async with httpx.AsyncClient(timeout=30.0, headers=headers) as hclient:
             oc_session_id = await _get_or_create_oc_session(server_url, session_id, hclient)
+            # Do not pass providerID/modelID — let OpenCode use its own default model
             ai_text = await _send_to_opencode(
                 server_url, oc_session_id, full_message, hclient
             )
@@ -296,16 +323,19 @@ async def chat_with_agent(
         logger.exception("OpenCode chat failed: %s", exc)
         # Remove failed session so next request creates a fresh one
         _oc_session_map.pop(session_id, None)
+        err_detail = str(exc)
         return {
             "text": (
                 f"抓歉，Vuls-Hunter AI 引擎暂时无法响应。\n\n"
                 f"**当前配置：** `{server_url}`\n\n"
-                "可能原因：\n"
+                f"**错误信息：** `{err_detail}`\n\n"
+                "常见原因：\n"
                 "1. OpenCode Server 未启动或地址不正确\n"
-                "2. API Key 错误或过期\n"
+                "2. OpenCode Server 内部的 LLM 提供商 API Key 错误或未配置\n"
                 "3. 网络连接问题或请求超时\n\n"
-                "解决方案： 确认 OpenCode Server 已运行，"
-                "然后在模型设置中更新 Server 地址并测试连接。"
+                "解决方案：\n"
+                "- 确认 OpenCode Server 已运行，在模型设置中点击「测试连接」\n"
+                "- 确认 OpenCode Server 内部已正确配置 LLM 提供商（如 openai、anthropic）"
             ),
             "suggestions": ["前往模型设置", "检查 OpenCode Server"],
             "session_id": session_id,
