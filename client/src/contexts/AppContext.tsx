@@ -740,7 +740,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setIsChatTyping(true);
 
       try {
-        const response = await chatApi.send(text, activeSessionId);
+        // Build history from current session messages (exclude scan-log bubbles)
+        const currentSession = chatSessions.find((s) => s.id === activeSessionId);
+        const history = (currentSession?.messages || [])
+          .filter((m) => !m.scanLogs && m.text)
+          .map((m) => ({
+            role: (m.sender === "user" ? "user" : "assistant") as "user" | "assistant",
+            content: m.text,
+          }))
+          .slice(-20); // last 20 messages
+
+        const response = await chatApi.send(text, activeSessionId, history);
         const aiMsg: ChatMessage = {
           id: `MSG-${Date.now() + 1}`,
           sender: "ai",

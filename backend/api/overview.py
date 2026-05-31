@@ -129,10 +129,16 @@ async def get_audit_logs(
 # Chat Agent
 # ─────────────────────────────────────────────
 
+# In-memory session history store: {session_id: [messages]}
+_chat_session_history: dict[str, list[dict]] = {}
+
+
 class ChatMessage(BaseModel):
     message: str
     session_id: str | None = None
     context: dict | None = None
+    # Optional: pass conversation history from frontend
+    history: list[dict] | None = None
 
 
 @router.post("/api/chat")
@@ -140,15 +146,22 @@ async def chat_with_agent(
     request: ChatMessage,
     db: AsyncSession = Depends(get_db),
 ) -> Any:
-    """Chat with the AI security agent."""
+    """Chat with the AI security agent via OpenCode Server.
+
+    The chat module exclusively uses OpenCode Server (configured separately in settings).
+    Other modules (scan, rule compile, etc.) use the LLM provider settings.
+
+    Maintains multi-turn conversation context per session.
+    """
+    import httpx
     import openai
+    from .settings import get_opencode_config
 
-    client = openai.AsyncOpenAI(
-        api_key=os.environ.get("OPENAI_API_KEY"),
-        base_url=os.environ.get("OPENAI_BASE_URL"),
-    )
+    # ── 1. Load OpenCode config (chat module always uses OpenCode) ────────────
+    oc_config = get_opencode_config()
+    session_id = request.session_id or "default"
 
-    # Build context from database
+    # ── 2. Build context from database ────────────────────────────────────────
     vuln_result = await db.execute(
         select(Vulnerability)
         .where(Vulnerability.status == "unresolved")
@@ -160,70 +173,149 @@ async def chat_with_agent(
     project_result = await db.execute(select(func.count(Project.id)))
     project_count = project_result.scalar() or 0
 
-    system_prompt = f"""You are an expert AI security analyst for the Vuls-Hunter platform.
-You help security teams understand vulnerabilities, plan remediation, and conduct security audits.
+    system_prompt = (
+        "You are an expert AI security analyst for the Vuls-Hunter platform. "
+        "You help security teams understand vulnerabilities, plan remediation, and conduct security audits.\n\n"
+        f"Current platform state:\n"
+        f"- Projects monitored: {project_count}\n"
+        f"- Active unresolved vulnerabilities: {len(recent_vulns)}\n"
+        f"- Recent vulnerabilities: {[v.title for v in recent_vulns[:5]]}\n\n"
+        "You can:\n"
+        "1. Explain vulnerabilities and their impact\n"
+        "2. Suggest remediation strategies\n"
+        "3. Guide users through security audits\n"
+        "4. Analyze code for security issues\n"
+        "5. Provide security best practices\n"
+        "Respond in Chinese (Simplified). Be concise but thorough.\n"
+        "When suggesting actions, provide specific actionable steps.\n"
+        "Format your response with clear sections when appropriate."
+    )
 
-Current platform state:
-- Projects monitored: {project_count}
-- Active unresolved vulnerabilities: {len(recent_vulns)}
-- Recent vulnerabilities: {[v.title for v in recent_vulns[:5]]}
+    # ── 3. Manage multi-turn session history ──────────────────────────────────
+    if session_id not in _chat_session_history:
+        _chat_session_history[session_id] = []
 
-You can:
-1. Explain vulnerabilities and their impact
-2. Suggest remediation strategies
-3. Guide users through security audits
-4. Analyze code for security issues
-5. Provide security best practices
+    if request.history:
+        _chat_session_history[session_id] = [
+            {"role": h["role"], "content": h["content"]}
+            for h in request.history
+            if h.get("role") in ("user", "assistant") and h.get("content")
+        ]
 
-Respond in Chinese (Simplified). Be concise but thorough.
-When suggesting actions, provide specific actionable steps.
-Format your response with clear sections when appropriate."""
+    history = _chat_session_history[session_id]
+    if len(history) > 40:
+        history = history[-40:]
+        _chat_session_history[session_id] = history
 
-    try:
-        response = await client.chat.completions.create(
-            model=os.environ.get("STRIX_LLM", "gpt-4.1-mini"),
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": request.message},
-            ],
-            temperature=0.7,
-            max_tokens=1024,
-        )
+    # ── 4. OpenCode Server mode (always used for chat) ───────────────────────
+    if True:
+        server_url = (oc_config.get("server_url") or "").rstrip("/")
+        oc_provider_id = oc_config.get("provider_id") or "openai"
+        oc_model_id = oc_config.get("model_id") or "gpt-4.1-mini"
 
-        ai_text = response.choices[0].message.content or "抱歉，我无法处理您的请求。"
+        if not server_url:
+            return {
+                "text": (
+                    "**OpenCode Server 未配置**\n\n"
+                    "请前往 **模型设置** 页面，找到 **智能对话引擎 (OpenCode)** 配置区域，"
+                    "填写 OpenCode Server 地址（如 `http://localhost:4096`），"
+                    "然后点击 [测试连接] 并保存配置。"
+                ),
+                "suggestions": ["前往模型设置", "查看 OpenCode 文档"],
+                "session_id": session_id,
+            }
 
-        # Log the interaction
-        log = AuditLog(
-            action=f"AI 对话: {request.message[:50]}...",
-            level="info",
-        )
-        db.add(log)
-        await db.commit()
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as hclient:
+                # Create or reuse an OpenCode session
+                oc_session_key = f"opencode_{session_id}"
+                oc_session_id = _chat_session_history.get(oc_session_key + "_oc_id")
 
-        # Generate suggestions based on context
-        suggestions = _generate_suggestions(request.message, recent_vulns)
+                if not oc_session_id:
+                    # Create new OpenCode session
+                    sess_resp = await hclient.post(
+                        f"{server_url}/session",
+                        json={},
+                        headers={"Content-Type": "application/json"},
+                    )
+                    sess_resp.raise_for_status()
+                    oc_session_id = sess_resp.json()["id"]
+                    # Store the mapping: vuls-hunter session_id -> opencode session id
+                    _chat_session_history[oc_session_key + "_oc_id"] = oc_session_id
+                    logger.info("Created OpenCode session: %s", oc_session_id)
 
-        return {
-            "text": ai_text,
-            "suggestions": suggestions,
-            "session_id": request.session_id,
-        }
+                # Build message text with system context on first message
+                user_text = request.message
+                if not history:  # First message in session
+                    user_text = (
+                        f"[系统背景]\n{system_prompt}\n\n"
+                        f"[用户问题]\n{request.message}"
+                    )
 
-    except Exception as exc:
-        logger.exception("Chat agent failed")
-        # Return a graceful fallback instead of 500
-        fallback_text = (
-            "抱歉，AI 助手暂时无法响应（可能是 API 密钥未配置或网络问题）。\n\n"
-            "您可以尝试：\n"
-            "1. 检查后端 OPENAI_API_KEY 环境变量是否已正确配置\n"
-            "2. 直接使用快速扫描功能对代码进行漏洞检测\n"
-            "3. 查看已有的扫描报告了解当前安全状态"
-        )
-        return {
-            "text": fallback_text,
-            "suggestions": ["启动快速扫描", "查看扫描报告", "查看规则库"],
-            "session_id": request.session_id,
-        }
+                # Send message to OpenCode
+                msg_resp = await hclient.post(
+                    f"{server_url}/session/{oc_session_id}/message",
+                    json={
+                        "parts": [{"type": "text", "text": user_text}],
+                        "model": {
+                            "providerID": oc_provider_id,
+                            "modelID": oc_model_id,
+                        },
+                    },
+                    headers={"Content-Type": "application/json"},
+                    timeout=120.0,
+                )
+                msg_resp.raise_for_status()
+                msg_data = msg_resp.json()
+
+            # Extract text from response parts
+            ai_text = ""
+            for part in msg_data.get("parts", []):
+                if part.get("type") == "text":
+                    ai_text += part.get("text", "")
+
+            if not ai_text:
+                ai_text = "OpenCode 已处理请求，但未返回文本内容。"
+
+            # Update session history
+            _chat_session_history[session_id].append({"role": "user", "content": request.message})
+            _chat_session_history[session_id].append({"role": "assistant", "content": ai_text})
+
+            # Log
+            log = AuditLog(
+                action=f"OpenCode 对话: {request.message[:50]}...",
+                level="info",
+            )
+            db.add(log)
+            await db.commit()
+
+            suggestions = _generate_suggestions(request.message, recent_vulns)
+            return {
+                "text": ai_text,
+                "suggestions": suggestions,
+                "session_id": session_id,
+                "provider": f"opencode-server ({oc_provider_id}/{oc_model_id})",
+            }
+
+        except Exception as exc:
+            logger.exception("OpenCode Server chat failed: %s", exc)
+            fallback_text = (
+                f"抱歉，OpenCode Server 暂时无法响应。\n\n"
+                f"**当前配置：** `{server_url}` (provider={oc_provider_id}, model={oc_model_id})\n\n"
+                "**可能原因：**\n"
+                "1. OpenCode Server 未启动或地址不正确\n"
+                "2. 指定的 provider/model 未在 OpenCode 中配置\n"
+                "3. 网络连接问题\n\n"
+                "**解决方案：** 确认 OpenCode Server 已运行 (`opencode serve --hostname 0.0.0.0 --port 4096`)，"
+                "然后在模型设置中更新 Server 地址并测试连接。"
+            )
+            return {
+                "text": fallback_text,
+                "suggestions": ["前往模型设置", "检查 OpenCode Server", "切换为 OpenAI 模式"],
+                "session_id": session_id,
+            }
+
+    # (OpenAI-compatible fallback removed — chat always uses OpenCode Server)
 
 
 def _generate_suggestions(message: str, vulns: list) -> list[str]:

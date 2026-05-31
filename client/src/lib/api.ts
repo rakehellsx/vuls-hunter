@@ -291,10 +291,14 @@ export const auditLogsApi = {
 // ─────────────────────────────────────────────
 
 export const chatApi = {
-  send: (message: string, session_id?: string) =>
+  send: (
+    message: string,
+    session_id?: string,
+    history?: Array<{ role: "user" | "assistant"; content: string }>
+  ) =>
     request<{ text: string; suggestions: string[]; session_id: string }>("/chat", {
       method: "POST",
-      body: JSON.stringify({ message, session_id }),
+      body: JSON.stringify({ message, session_id, history }),
     }),
 };
 

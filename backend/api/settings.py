@@ -13,9 +13,12 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
-# Settings file path (persisted to disk)
-SETTINGS_FILE = Path(__file__).parent.parent.parent / "data" / "llm_settings.json"
-SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+# Settings file paths (persisted to disk)
+_DATA_DIR = Path(__file__).parent.parent.parent / "data"
+_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+SETTINGS_FILE = _DATA_DIR / "llm_settings.json"
+OPENCODE_SETTINGS_FILE = _DATA_DIR / "opencode_settings.json"
 
 
 # ─────────────────────────────────────────────
@@ -30,6 +33,11 @@ class LLMProvider(BaseModel):
     model: str
     enabled: bool = True
     is_default: bool = False
+    provider_type: str = "openai_compatible"
+    # keep these fields for backward compat but they are no longer used for chat
+    opencode_server_url: str = ""
+    opencode_provider_id: str = "openai"
+    opencode_model_id: str = "gpt-4.1-mini"
 
 
 class LLMSettingsUpdate(BaseModel):
@@ -37,8 +45,16 @@ class LLMSettingsUpdate(BaseModel):
     active_provider_id: str | None = None
 
 
+class OpenCodeConfig(BaseModel):
+    """Standalone OpenCode Server configuration (used exclusively by the chat module)."""
+    server_url: str = "http://localhost:4096"
+    provider_id: str = "openai"
+    model_id: str = "gpt-4.1-mini"
+    enabled: bool = True
+
+
 # ─────────────────────────────────────────────
-# Default settings
+# Default LLM settings (for scan / rule compile / etc.)
 # ─────────────────────────────────────────────
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -51,6 +67,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
             "model": "gpt-4.1-mini",
             "enabled": True,
             "is_default": True,
+            "provider_type": "openai_compatible",
+            "opencode_server_url": "",
+            "opencode_provider_id": "openai",
+            "opencode_model_id": "gpt-4.1-mini",
         },
         {
             "id": "deepseek",
@@ -60,47 +80,94 @@ DEFAULT_SETTINGS: dict[str, Any] = {
             "model": "deepseek-chat",
             "enabled": False,
             "is_default": False,
+            "provider_type": "openai_compatible",
+            "opencode_server_url": "",
+            "opencode_provider_id": "deepseek",
+            "opencode_model_id": "deepseek-chat",
+        },
+        {
+            "id": "groq",
+            "name": "Groq",
+            "base_url": "https://api.groq.com/openai/v1",
+            "api_key": "",
+            "model": "llama-3.3-70b-versatile",
+            "enabled": False,
+            "is_default": False,
+            "provider_type": "openai_compatible",
+            "opencode_server_url": "",
+            "opencode_provider_id": "groq",
+            "opencode_model_id": "llama-3.3-70b-versatile",
+        },
+        {
+            "id": "ollama",
+            "name": "Ollama (Local)",
+            "base_url": "http://localhost:11434/v1",
+            "api_key": "ollama",
+            "model": "llama3",
+            "enabled": False,
+            "is_default": False,
+            "provider_type": "openai_compatible",
+            "opencode_server_url": "",
+            "opencode_provider_id": "ollama",
+            "opencode_model_id": "llama3",
         },
     ],
     "active_provider_id": "openai-default",
 }
 
+# Default OpenCode settings
+DEFAULT_OPENCODE: dict[str, Any] = {
+    "server_url": os.environ.get("OPENCODE_SERVER_URL", "http://localhost:4096"),
+    "provider_id": os.environ.get("OPENCODE_PROVIDER_ID", "openai"),
+    "model_id": os.environ.get("OPENCODE_MODEL_ID", "gpt-4.1-mini"),
+    "enabled": True,
+}
+
+
+# ─────────────────────────────────────────────
+# LLM settings helpers
+# ─────────────────────────────────────────────
 
 def _load_settings() -> dict[str, Any]:
-    """Load settings from disk, falling back to defaults."""
+    """Load LLM settings from disk, falling back to defaults."""
     if SETTINGS_FILE.exists():
         try:
             data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-            # Merge with defaults to ensure all keys exist
             if "providers" not in data:
                 data["providers"] = DEFAULT_SETTINGS["providers"]
             if "active_provider_id" not in data:
                 data["active_provider_id"] = DEFAULT_SETTINGS["active_provider_id"]
+            # Ensure new fields exist on old saved providers
+            for p in data["providers"]:
+                p.setdefault("provider_type", "openai_compatible")
+                p.setdefault("opencode_server_url", "")
+                p.setdefault("opencode_provider_id", "openai")
+                p.setdefault("opencode_model_id", p.get("model", "gpt-4.1-mini"))
+            # Remove opencode-server from LLM providers list if present (legacy cleanup)
+            data["providers"] = [p for p in data["providers"] if p.get("id") != "opencode-server"]
             return data
         except Exception as exc:
-            logger.warning("Failed to load settings: %s", exc)
+            logger.warning("Failed to load LLM settings: %s", exc)
     return DEFAULT_SETTINGS.copy()
 
 
 def _save_settings(data: dict[str, Any]) -> None:
-    """Save settings to disk."""
+    """Save LLM settings to disk."""
     SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def get_active_llm_config() -> dict[str, str]:
-    """Get the active LLM provider config for use in scan/chat calls."""
+def get_active_llm_config() -> dict[str, Any]:
+    """Get the active LLM provider config for scan/rule-compile calls (OpenAI-compatible only)."""
     settings = _load_settings()
     active_id = settings.get("active_provider_id")
     providers = settings.get("providers", [])
 
-    # Find active provider
     active = None
     for p in providers:
         if p.get("id") == active_id and p.get("enabled"):
             active = p
             break
 
-    # Fallback to first enabled provider
     if not active:
         for p in providers:
             if p.get("enabled"):
@@ -108,14 +175,15 @@ def get_active_llm_config() -> dict[str, str]:
                 break
 
     if not active:
-        # Use environment variables as last resort
         return {
+            "provider_type": "openai_compatible",
             "api_key": os.environ.get("OPENAI_API_KEY", ""),
             "base_url": os.environ.get("OPENAI_BASE_URL", ""),
             "model": os.environ.get("STRIX_LLM", "gpt-4.1-mini"),
         }
 
     return {
+        "provider_type": "openai_compatible",
         "api_key": active.get("api_key") or os.environ.get("OPENAI_API_KEY", ""),
         "base_url": active.get("base_url", ""),
         "model": active.get("model", "gpt-4.1-mini"),
@@ -123,14 +191,43 @@ def get_active_llm_config() -> dict[str, str]:
 
 
 # ─────────────────────────────────────────────
-# Routes
+# OpenCode settings helpers (chat module only)
+# ─────────────────────────────────────────────
+
+def _load_opencode_settings() -> dict[str, Any]:
+    """Load OpenCode settings from disk, falling back to defaults."""
+    if OPENCODE_SETTINGS_FILE.exists():
+        try:
+            data = json.loads(OPENCODE_SETTINGS_FILE.read_text(encoding="utf-8"))
+            # Ensure all keys exist
+            data.setdefault("server_url", DEFAULT_OPENCODE["server_url"])
+            data.setdefault("provider_id", DEFAULT_OPENCODE["provider_id"])
+            data.setdefault("model_id", DEFAULT_OPENCODE["model_id"])
+            data.setdefault("enabled", DEFAULT_OPENCODE["enabled"])
+            return data
+        except Exception as exc:
+            logger.warning("Failed to load OpenCode settings: %s", exc)
+    return DEFAULT_OPENCODE.copy()
+
+
+def _save_opencode_settings(data: dict[str, Any]) -> None:
+    """Save OpenCode settings to disk."""
+    OPENCODE_SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_opencode_config() -> dict[str, Any]:
+    """Get OpenCode Server config for the chat module."""
+    return _load_opencode_settings()
+
+
+# ─────────────────────────────────────────────
+# Routes — LLM (for scan / rule compile / etc.)
 # ─────────────────────────────────────────────
 
 @router.get("/llm")
 async def get_llm_settings() -> Any:
-    """Get current LLM settings."""
+    """Get current LLM settings (scan/rule providers)."""
     settings = _load_settings()
-    # Mask API keys for security (show only last 8 chars)
     masked = json.loads(json.dumps(settings))
     for p in masked.get("providers", []):
         key = p.get("api_key", "")
@@ -143,10 +240,9 @@ async def get_llm_settings() -> Any:
 
 @router.put("/llm")
 async def update_llm_settings(body: LLMSettingsUpdate) -> Any:
-    """Update LLM settings."""
+    """Update LLM settings (scan/rule providers)."""
     settings = _load_settings()
 
-    # Update providers (preserve existing API keys if not changed)
     existing_keys: dict[str, str] = {}
     for p in settings.get("providers", []):
         existing_keys[p["id"]] = p.get("api_key", "")
@@ -154,9 +250,11 @@ async def update_llm_settings(body: LLMSettingsUpdate) -> Any:
     providers_data = []
     for p in body.providers:
         pd = p.model_dump()
-        # If API key is masked (contains ***), restore original
         if "***" in pd.get("api_key", ""):
             pd["api_key"] = existing_keys.get(p.id, "")
+        # Ensure opencode-server is never stored in LLM providers
+        if pd.get("id") == "opencode-server":
+            continue
         providers_data.append(pd)
 
     settings["providers"] = providers_data
@@ -180,11 +278,10 @@ async def update_llm_settings(body: LLMSettingsUpdate) -> Any:
 
 @router.post("/llm/test")
 async def test_llm_connection(body: LLMProvider) -> Any:
-    """Test LLM provider connectivity."""
+    """Test LLM provider connectivity (OpenAI-compatible only)."""
     import openai
 
     api_key = body.api_key
-    # If masked, load from saved settings
     if "***" in api_key:
         settings = _load_settings()
         for p in settings.get("providers", []):
@@ -195,7 +292,6 @@ async def test_llm_connection(body: LLMProvider) -> Any:
     if not api_key:
         raise HTTPException(status_code=400, detail="API Key 不能为空")
 
-    # Normalize base_url: remove trailing /chat/completions if present
     base_url = body.base_url.rstrip("/")
     if base_url.endswith("/chat/completions"):
         base_url = base_url[: -len("/chat/completions")]
@@ -219,4 +315,53 @@ async def test_llm_connection(body: LLMProvider) -> Any:
         }
     except Exception as exc:
         logger.warning("LLM test failed: %s", exc)
+        raise HTTPException(status_code=400, detail=f"连接失败: {exc}")
+
+
+# ─────────────────────────────────────────────
+# Routes — OpenCode (for chat module only)
+# ─────────────────────────────────────────────
+
+@router.get("/opencode")
+async def get_opencode_settings() -> Any:
+    """Get OpenCode Server settings (used exclusively by the chat module)."""
+    return _load_opencode_settings()
+
+
+@router.put("/opencode")
+async def update_opencode_settings(body: OpenCodeConfig) -> Any:
+    """Update OpenCode Server settings."""
+    data = {
+        "server_url": body.server_url.rstrip("/"),
+        "provider_id": body.provider_id,
+        "model_id": body.model_id,
+        "enabled": body.enabled,
+    }
+    _save_opencode_settings(data)
+    logger.info("OpenCode settings updated: %s", data)
+    return {"success": True, "message": "OpenCode 配置已保存并生效"}
+
+
+@router.post("/opencode/test")
+async def test_opencode_connection(body: OpenCodeConfig) -> Any:
+    """Test OpenCode Server connectivity."""
+    import httpx
+
+    server_url = (body.server_url or "").rstrip("/")
+    if not server_url:
+        raise HTTPException(status_code=400, detail="OpenCode Server 地址不能为空")
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{server_url}/global/health")
+            resp.raise_for_status()
+            health = resp.json()
+        version = health.get("version", "unknown")
+        return {
+            "success": True,
+            "message": f"OpenCode Server 连接成功！版本: {version}",
+            "version": version,
+        }
+    except Exception as exc:
+        logger.warning("OpenCode server test failed: %s", exc)
         raise HTTPException(status_code=400, detail=f"连接失败: {exc}")

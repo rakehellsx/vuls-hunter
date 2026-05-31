@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { useApp, Project, Vulnerability } from "@/contexts/AppContext";
 import { projectsApi, scansApi } from "@/lib/api";
 import { 
@@ -665,10 +666,11 @@ export default function Projects() {
         </div>
       </div>
 
-      {/* 关联仓库模态弹窗 */}
-      {showAddModal && (
+      {/* 关联仓库模态弹窗 - 使用 Portal 挂载到 body，确保全屏居中 */}
+      {showAddModal && createPortal(
         <div 
-          className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fadeIn"
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-[9999] animate-fadeIn"
+          style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
           onClick={(e) => { if (e.target === e.currentTarget) { setShowAddModal(false); setSubmitError(""); } }}
         >
           <div className="bg-white border border-[#e7e5e4] rounded-xl p-6 w-full max-w-md shadow-2xl space-y-4">
@@ -834,7 +836,7 @@ export default function Projects() {
             </form>
           </div>
         </div>
-      )}
+      , document.body)}
     </div>
   );
 }
