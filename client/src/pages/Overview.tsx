@@ -84,7 +84,7 @@ export default function Overview() {
           <div className="space-y-1">
             <p className="text-xs font-bold text-[#78716c] uppercase tracking-wider">未解决漏洞</p>
             <h3 className="text-3xl font-extrabold text-red-600 tracking-tight">{activeVulnerabilities}</h3>
-            <p className="text-xs text-[#a8a29e] font-medium">包含严重/高危漏洞</p>
+            <p className="text-xs text-[#a8a29e] font-medium">{criticalCount + highCount > 0 ? `含 ${criticalCount + highCount} 个严重/高危` : '暂无严重/高危漏洞'}</p>
           </div>
           <div className="w-12 h-12 rounded-xl bg-red-50 border border-red-100 flex items-center justify-center text-red-600">
             <ShieldAlert className="w-6 h-6" />
@@ -187,7 +187,7 @@ export default function Overview() {
                 <span>{rules.filter(r => r.type === "security").length} 条</span>
               </div>
               <div className="h-2 w-full bg-stone-100 rounded-full overflow-hidden">
-                <div className="h-full bg-blue-600 rounded-full" style={{ width: `${(rules.filter(r => r.type === "security").length / totalRules) * 100}%` }}></div>
+                <div className="h-full bg-blue-600 rounded-full" style={{ width: `${totalRules > 0 ? (rules.filter(r => r.type === "security").length / totalRules) * 100 : 0}%` }}></div>
               </div>
             </div>
             {/* 质量缺陷 */}
@@ -197,7 +197,7 @@ export default function Overview() {
                 <span>{rules.filter(r => r.type === "quality").length} 条</span>
               </div>
               <div className="h-2 w-full bg-stone-100 rounded-full overflow-hidden">
-                <div className="h-full bg-amber-500 rounded-full" style={{ width: `${(rules.filter(r => r.type === "quality").length / totalRules) * 100}%` }}></div>
+                <div className="h-full bg-amber-500 rounded-full" style={{ width: `${totalRules > 0 ? (rules.filter(r => r.type === "quality").length / totalRules) * 100 : 0}%` }}></div>
               </div>
             </div>
             {/* 编码规范 */}
@@ -207,7 +207,7 @@ export default function Overview() {
                 <span>{rules.filter(r => r.type === "standard").length} 条</span>
               </div>
               <div className="h-2 w-full bg-stone-100 rounded-full overflow-hidden">
-                <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${(rules.filter(r => r.type === "standard").length / totalRules) * 100}%` }}></div>
+                <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${totalRules > 0 ? (rules.filter(r => r.type === "standard").length / totalRules) * 100 : 0}%` }}></div>
               </div>
             </div>
           </div>
@@ -240,6 +240,13 @@ export default function Overview() {
               </tr>
             </thead>
             <tbody className="divide-y divide-[#f5f5f4]">
+              {projects.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="py-10 text-center text-sm text-[#78716c]">
+                    暂无项目，请先在「项目管理」中关联代码仓库
+                  </td>
+                </tr>
+              ) : null}
               {projects.slice(0, 3).map(p => {
                 const unresolvedCount = p.vulnerabilities.filter(v => v.status === "unresolved").length;
                 return (
@@ -250,7 +257,7 @@ export default function Overview() {
                         {p.language}
                       </span>
                     </td>
-                    <td className="py-3.5 px-4 text-[#57534e] text-xs">{p.lastScanTime}</td>
+                    <td className="py-3.5 px-4 text-[#57534e] text-xs">{p.lastScanTime ? new Date(p.lastScanTime).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '未扫描'}</td>
                     <td className="py-3.5 px-4">
                       {unresolvedCount > 0 ? (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-red-50 border border-red-100 text-red-700 text-xs font-bold">
