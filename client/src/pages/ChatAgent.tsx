@@ -680,10 +680,10 @@ export default function ChatAgent() {
         <h2 className="text-xl font-bold tracking-tight text-[#1c1917] flex items-center gap-2">
           <Bot className="w-5 h-5 text-blue-600" />
           智能对话漏洞挖掘
-          <span className="ml-1 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-[10px] font-bold tracking-wide uppercase">OpenCode</span>
+          <span className="ml-1 px-2 py-0.5 bg-indigo-100 text-indigo-700 rounded-full text-[10px] font-bold tracking-wide uppercase">Vuls-Hunter</span>
         </h2>
         <p className="text-xs text-[#78716c]">
-          由 OpenCode AI 驱动的对话式漏洞挖掘引擎。上传代码包或输入 GitHub URL，通过自然语言交互进行深度安全审计。
+          由 Vuls-Hunter AI 驱动的对话式漏洞挖掘引擎。上传代码包或输入 GitHub URL，通过自然语言交互进行深度安全审计。
         </p>
       </div>
 
@@ -768,7 +768,7 @@ export default function ChatAgent() {
                     <div className="space-y-1">
                       <h3 className="text-base font-bold text-[#1c1917]">开始漏洞挖掘对话</h3>
                       <p className="text-sm text-[#78716c] max-w-sm">
-                        上传代码压缩包或输入 GitHub URL，由 OpenCode AI 进行深度安全审计；<br />
+                        上传代码压缩包或输入 GitHub URL，由 Vuls-Hunter AI 进行深度安全审计；<br />
                         或直接提问安全相关问题。
                       </p>
                     </div>
@@ -802,7 +802,7 @@ export default function ChatAgent() {
                       <span className="w-1.5 h-1.5 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
                       <span className="w-1.5 h-1.5 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
                       <span className="w-1.5 h-1.5 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-                      <span className="text-xs text-stone-500 ml-1">OpenCode AI 正在分析...</span>
+                      <span className="text-xs text-stone-500 ml-1">Vuls-Hunter AI 正在分析...</span>
                     </div>
                   </div>
                 )}
@@ -1002,7 +1002,7 @@ export default function ChatAgent() {
                 )}
 
                 <p className="text-[10px] text-stone-400 text-center">
-                  由 OpenCode AI 驱动 · Enter 发送 · Shift+Enter 换行
+                  由 Vuls-Hunter AI 驱动 · Enter 发送 · Shift+Enter 换行
                 </p>
               </div>
             </div>
