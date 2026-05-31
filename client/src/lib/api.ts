@@ -291,14 +291,37 @@ export const auditLogsApi = {
 // ─────────────────────────────────────────────
 
 export const chatApi = {
-  send: (
+  send: async (
     message: string,
     session_id?: string,
-    history?: Array<{ role: "user" | "assistant"; content: string }>
-  ) =>
-    request<{ text: string; suggestions: string[]; session_id: string }>("/chat", {
+    history?: Array<{ role: "user" | "assistant"; content: string }>,
+    code_context?: string,
+    target_info?: string
+  ): Promise<{ text: string; suggestions: string[]; session_id: string; provider?: string }> => {
+    // Use a longer timeout (120s) for OpenCode API calls
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
+    try {
+      const res = await fetch(`${API_BASE}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, session_id, history, code_context, target_info }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const error = await res.text();
+        throw new Error(`API /chat failed (${res.status}): ${error}`);
+      }
+      return res.json();
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  },
+
+  resetSession: (session_id: string) =>
+    request<{ ok: boolean; removed: boolean; session_id: string }>("/chat/reset-session", {
       method: "POST",
-      body: JSON.stringify({ message, session_id, history }),
+      body: JSON.stringify({ session_id }),
     }),
 };
 

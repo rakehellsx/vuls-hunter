@@ -234,6 +234,19 @@ export default defineConfig({
         "127.0.0.1",
       ],
       proxy: {
+        "/api/chat": {
+          target: "http://127.0.0.1:8000",
+          changeOrigin: true,
+          ws: true,
+          timeout: 180000,
+          proxyTimeout: 180000,
+        },
+        "/api/upload": {
+          target: "http://127.0.0.1:8000",
+          changeOrigin: true,
+          timeout: 180000,
+          proxyTimeout: 180000,
+        },
         "/api": {
           target: "http://127.0.0.1:8000",
           changeOrigin: true,

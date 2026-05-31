@@ -243,6 +243,7 @@ async def upload_archive(
         "file_count": len(file_list),
         "language": language,
         "files_analyzed": file_list[:20],  # Return first 20 for display
+        "code_content": combined_code,  # Full code for OpenCode analysis
         "message": f"已提取 {len(file_list)} 个代码文件，开始分析...",
     }
 
@@ -323,6 +324,7 @@ async def analyze_url(body: AnalyzeUrlRequest) -> Any:
             "file_count": len(file_list),
             "language": language,
             "files_analyzed": file_list[:20],
+            "code_content": combined_code,  # Full code for OpenCode analysis
             "message": f"已获取 {len(file_list)} 个代码文件，开始分析...",
         }
 

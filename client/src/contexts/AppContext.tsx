@@ -158,7 +158,7 @@ interface AppContextType {
   setActiveSessionId: (id: string) => void;
   createNewSession: () => void;
   deleteSession: (id: string) => void;
-  sendChatMessage: (text: string) => void;
+  sendChatMessage: (text: string, code_context?: string, target_info?: string) => void;
   addChatMessage: (msg: ChatMessage) => void;
   updateChatMessage: (msgId: string, updater: (prev: ChatMessage) => ChatMessage) => void;
   isChatTyping: boolean;
@@ -713,7 +713,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const sendChatMessage = useCallback(
-    async (text: string) => {
+    async (text: string, code_context?: string, target_info?: string) => {
       const userMsg: ChatMessage = {
         id: `MSG-${Date.now()}`,
         sender: "user",
@@ -750,7 +750,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }))
           .slice(-20); // last 20 messages
 
-        const response = await chatApi.send(text, activeSessionId, history);
+        const response = await chatApi.send(text, activeSessionId, history, code_context, target_info);
         const aiMsg: ChatMessage = {
           id: `MSG-${Date.now() + 1}`,
           sender: "ai",
