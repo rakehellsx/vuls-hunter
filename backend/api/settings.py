@@ -48,8 +48,7 @@ class LLMSettingsUpdate(BaseModel):
 class OpenCodeConfig(BaseModel):
     """Standalone OpenCode Server configuration (used exclusively by the chat module)."""
     server_url: str = "http://localhost:4096"
-    provider_id: str = "openai"
-    model_id: str = "gpt-4.1-mini"
+    api_key: str = ""
     enabled: bool = True
 
 
@@ -118,8 +117,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 # Default OpenCode settings
 DEFAULT_OPENCODE: dict[str, Any] = {
     "server_url": os.environ.get("OPENCODE_SERVER_URL", "http://localhost:4096"),
-    "provider_id": os.environ.get("OPENCODE_PROVIDER_ID", "openai"),
-    "model_id": os.environ.get("OPENCODE_MODEL_ID", "gpt-4.1-mini"),
+    "api_key": os.environ.get("OPENCODE_API_KEY", ""),
     "enabled": True,
 }
 
@@ -201,8 +199,7 @@ def _load_opencode_settings() -> dict[str, Any]:
             data = json.loads(OPENCODE_SETTINGS_FILE.read_text(encoding="utf-8"))
             # Ensure all keys exist
             data.setdefault("server_url", DEFAULT_OPENCODE["server_url"])
-            data.setdefault("provider_id", DEFAULT_OPENCODE["provider_id"])
-            data.setdefault("model_id", DEFAULT_OPENCODE["model_id"])
+            data.setdefault("api_key", DEFAULT_OPENCODE["api_key"])
             data.setdefault("enabled", DEFAULT_OPENCODE["enabled"])
             return data
         except Exception as exc:
@@ -331,14 +328,18 @@ async def get_opencode_settings() -> Any:
 @router.put("/opencode")
 async def update_opencode_settings(body: OpenCodeConfig) -> Any:
     """Update OpenCode Server settings."""
+    # Preserve existing api_key if masked placeholder is submitted
+    existing = _load_opencode_settings()
+    api_key = body.api_key
+    if "***" in api_key:
+        api_key = existing.get("api_key", "")
     data = {
         "server_url": body.server_url.rstrip("/"),
-        "provider_id": body.provider_id,
-        "model_id": body.model_id,
+        "api_key": api_key,
         "enabled": body.enabled,
     }
     _save_opencode_settings(data)
-    logger.info("OpenCode settings updated: %s", data)
+    logger.info("OpenCode settings updated: server_url=%s", data["server_url"])
     return {"success": True, "message": "OpenCode 配置已保存并生效"}
 
 

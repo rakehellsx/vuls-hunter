@@ -49,8 +49,7 @@ interface LLMSettings {
 
 interface OpenCodeSettings {
   server_url: string;
-  provider_id: string;
-  model_id: string;
+  api_key: string;
   enabled: boolean;
 }
 
@@ -136,10 +135,10 @@ async function testOpenCodeConnection(cfg: OpenCodeSettings): Promise<string> {
 function OpenCodeSection() {
   const [cfg, setCfg] = useState<OpenCodeSettings>({
     server_url: "http://localhost:4096",
-    provider_id: "openai",
-    model_id: "gpt-4.1-mini",
+    api_key: "",
     enabled: true,
   });
+  const [showApiKey, setShowApiKey] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -251,7 +250,7 @@ function OpenCodeSection() {
         <div className="space-y-3">
           <div>
             <label className="text-xs font-bold text-stone-500 flex items-center gap-1 mb-1">
-              <Globe className="w-3 h-3" /> OpenCode Server 地址
+              <Globe className="w-3 h-3" /> Server 地址
             </label>
             <input
               type="url"
@@ -262,33 +261,27 @@ function OpenCodeSection() {
             />
             <p className="text-[10px] text-stone-400 mt-0.5">OpenCode Server 的 HTTP 地址（默认端口 4096）</p>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-bold text-stone-500 flex items-center gap-1 mb-1">
-                <Layers className="w-3 h-3" /> Provider ID
-              </label>
+          <div>
+            <label className="text-xs font-bold text-stone-500 flex items-center gap-1 mb-1">
+              <Key className="w-3 h-3" /> API Key <span className="text-stone-400 font-normal">(可选)</span>
+            </label>
+            <div className="relative">
               <input
-                type="text"
-                value={cfg.provider_id}
-                onChange={(e) => setCfg((prev) => ({ ...prev, provider_id: e.target.value }))}
-                placeholder="openai"
-                className="w-full px-3 py-2 text-sm border border-[#e7e5e4] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-violet-500 font-mono"
+                type={showApiKey ? "text" : "password"}
+                value={cfg.api_key}
+                onChange={(e) => setCfg((prev) => ({ ...prev, api_key: e.target.value }))}
+                placeholder="如不需要认证可留空"
+                className="w-full px-3 py-2 pr-10 text-sm border border-[#e7e5e4] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-violet-500 font-mono"
               />
-              <p className="text-[10px] text-stone-400 mt-0.5">OpenCode 内部 provider（如 openai、anthropic）</p>
+              <button
+                type="button"
+                onClick={() => setShowApiKey((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 transition-colors"
+              >
+                {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
             </div>
-            <div>
-              <label className="text-xs font-bold text-stone-500 flex items-center gap-1 mb-1">
-                <Cpu className="w-3 h-3" /> Model ID
-              </label>
-              <input
-                type="text"
-                value={cfg.model_id}
-                onChange={(e) => setCfg((prev) => ({ ...prev, model_id: e.target.value }))}
-                placeholder="gpt-4.1-mini"
-                className="w-full px-3 py-2 text-sm border border-[#e7e5e4] rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-violet-500 font-mono"
-              />
-              <p className="text-[10px] text-stone-400 mt-0.5">OpenCode 内部 model ID（如 gpt-4.1-mini）</p>
-            </div>
+            <p className="text-[10px] text-stone-400 mt-0.5">若 OpenCode Server 需要认证，请填写 API Key</p>
           </div>
         </div>
 
@@ -306,12 +299,12 @@ function OpenCodeSection() {
       </div>
 
       <div className="bg-violet-50 border border-violet-200 rounded-xl p-4 space-y-1.5">
-        <p className="text-xs font-bold text-violet-800">OpenCode 使用说明</p>
+        <p className="text-xs font-bold text-violet-800">使用说明</p>
         <ul className="text-xs text-violet-700 space-y-1 list-disc list-inside">
-          <li>智能对话模块<strong>固定使用</strong> OpenCode Server，不受下方扫描引擎配置影响</li>
+          <li>智能对话模块<strong>固定使用</strong>此配置，不受下方扫描引擎配置影响</li>
           <li>先在服务器运行 <code className="bg-violet-100 px-1 rounded">opencode serve --hostname 0.0.0.0 --port 4096</code></li>
           <li>填写 Server 地址后点击「测试连接」确认可用，再点击「保存配置」</li>
-          <li>Provider ID 和 Model ID 需与 OpenCode Server 中已配置的提供商一致</li>
+          <li>API Key 为可选项，仅在 Server 开启认证时需要填写</li>
         </ul>
       </div>
     </div>

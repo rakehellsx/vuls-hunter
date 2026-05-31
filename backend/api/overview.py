@@ -185,8 +185,6 @@ async def _get_or_create_oc_session(server_url: str, session_id: str, hclient: A
 async def _send_to_opencode(
     server_url: str,
     oc_session_id: str,
-    provider_id: str,
-    model_id: str,
     message_text: str,
     hclient: Any,
 ) -> str:
@@ -196,8 +194,8 @@ async def _send_to_opencode(
         json={
             "parts": [{"type": "text", "text": message_text}],
             "model": {
-                "providerID": provider_id,
-                "modelID": model_id,
+                "providerID": "openai",
+                "modelID": "gpt-4.1-mini",
             },
         },
         headers={"Content-Type": "application/json"},
@@ -233,14 +231,13 @@ async def chat_with_agent(
     session_id = request.session_id or "default"
 
     server_url = (oc_config.get("server_url") or "").rstrip("/")
-    provider_id = oc_config.get("provider_id") or "openai"
-    model_id = oc_config.get("model_id") or "gpt-4.1-mini"
+    api_key = oc_config.get("api_key") or ""
 
     if not server_url:
         return {
             "text": (
                 "**OpenCode Server 未配置**\n\n"
-                "请前往 **模型设置** 页面，找到 **智能对话引擎 (OpenCode)** 配置区域，"
+                "请前往 **模型设置** 页面，找到 **智能对话引擎** 配置区域，"
                 "填写 OpenCode Server 地址（如 `http://localhost:4096`），"
                 "然后点击「测试连接」并保存配置。"
             ),
@@ -270,10 +267,13 @@ async def chat_with_agent(
     full_message = "\n".join(message_parts)
 
     try:
-        async with httpx.AsyncClient(timeout=30.0) as hclient:
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        async with httpx.AsyncClient(timeout=30.0, headers=headers) as hclient:
             oc_session_id = await _get_or_create_oc_session(server_url, session_id, hclient)
             ai_text = await _send_to_opencode(
-                server_url, oc_session_id, provider_id, model_id, full_message, hclient
+                server_url, oc_session_id, full_message, hclient
             )
 
         # Log to audit
@@ -289,7 +289,7 @@ async def chat_with_agent(
             "text": ai_text,
             "suggestions": suggestions,
             "session_id": session_id,
-            "provider": f"opencode ({provider_id}/{model_id})",
+            "provider": "opencode-server",
         }
 
     except Exception as exc:
@@ -298,13 +298,13 @@ async def chat_with_agent(
         _oc_session_map.pop(session_id, None)
         return {
             "text": (
-                f"抱歉，OpenCode Server 暂时无法响应。\n\n"
-                f"**当前配置：** `{server_url}` (provider={provider_id}, model={model_id})\n\n"
-                "**可能原因：**\n"
+                f"抓歉，Vuls-Hunter AI 引擎暂时无法响应。\n\n"
+                f"**当前配置：** `{server_url}`\n\n"
+                "可能原因：\n"
                 "1. OpenCode Server 未启动或地址不正确\n"
-                "2. 指定的 provider/model 未在 OpenCode 中配置\n"
+                "2. API Key 错误或过期\n"
                 "3. 网络连接问题或请求超时\n\n"
-                "**解决方案：** 确认 OpenCode Server 已运行，"
+                "解决方案： 确认 OpenCode Server 已运行，"
                 "然后在模型设置中更新 Server 地址并测试连接。"
             ),
             "suggestions": ["前往模型设置", "检查 OpenCode Server"],
