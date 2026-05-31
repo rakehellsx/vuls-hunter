@@ -1,16 +1,28 @@
 """Overview, audit logs, and chat API routes."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from ..db import AuditLog, Project, Report, Scan, ScanStatus, Vulnerability, get_db
+from ..db import (
+    AuditLog,
+    ChatMessage,
+    ChatSession,
+    Project,
+    Report,
+    Scan,
+    ScanStatus,
+    Vulnerability,
+    get_db,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["overview"])
@@ -118,11 +130,8 @@ async def get_audit_logs(
 
 
 # ─────────────────────────────────────────────
-# Chat Agent — OpenCode API
+# Chat Agent — OpenCode API + SQLite Persistence
 # ─────────────────────────────────────────────
-
-# In-memory store: session_id -> opencode_session_id
-_oc_session_map: dict[str, str] = {}
 
 # System prompt for vulnerability hunting
 VULN_HUNTER_SYSTEM_PROMPT = """你是 Vuls-Hunter 平台的首席 AI 安全研究员，专精于代码安全审计与漏洞挖掘。
@@ -164,10 +173,65 @@ class ChatRequest(BaseModel):
     target_info: str | None = None
 
 
-async def _get_or_create_oc_session(server_url: str, session_id: str, hclient: Any) -> str:
-    """Get existing OpenCode session or create a new one."""
-    if session_id in _oc_session_map:
-        return _oc_session_map[session_id]
+# ─── DB helpers ──────────────────────────────────────────────────────────────
+
+async def _get_or_create_db_session(
+    db: AsyncSession, session_key: str
+) -> ChatSession:
+    """Get existing ChatSession row or create a new one."""
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.session_key == session_key)
+    )
+    sess = result.scalar_one_or_none()
+    if sess is None:
+        sess = ChatSession(session_key=session_key)
+        db.add(sess)
+        await db.flush()  # get sess.id without committing
+    return sess
+
+
+async def _get_db_session_history(
+    db: AsyncSession, session_db_id: int, limit: int = 40
+) -> list[dict]:
+    """Return the last `limit` messages as list of {role, content} dicts."""
+    result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_db_id)
+        .order_by(ChatMessage.id.desc())
+        .limit(limit)
+    )
+    rows = list(reversed(result.scalars().all()))
+    return [{"role": r.role, "content": r.content} for r in rows]
+
+
+async def _save_messages(
+    db: AsyncSession,
+    session_db_id: int,
+    user_text: str,
+    ai_text: str,
+    suggestions: list[str] | None = None,
+) -> None:
+    """Persist user + assistant messages to the database."""
+    db.add(ChatMessage(session_id=session_db_id, role="user", content=user_text))
+    db.add(ChatMessage(
+        session_id=session_db_id,
+        role="assistant",
+        content=ai_text,
+        suggestions=json.dumps(suggestions, ensure_ascii=False) if suggestions else None,
+    ))
+
+
+# ─── OpenCode helpers ─────────────────────────────────────────────────────────
+
+async def _get_or_create_oc_session(
+    server_url: str,
+    db_session: ChatSession,
+    db: AsyncSession,
+    hclient: Any,
+) -> str:
+    """Get existing OpenCode session or create a new one, persisted in DB."""
+    if db_session.oc_session_id:
+        return db_session.oc_session_id
 
     sess_resp = await hclient.post(
         f"{server_url}/session",
@@ -177,8 +241,15 @@ async def _get_or_create_oc_session(server_url: str, session_id: str, hclient: A
     )
     sess_resp.raise_for_status()
     oc_session_id = sess_resp.json()["id"]
-    _oc_session_map[session_id] = oc_session_id
-    logger.info("Created OpenCode session: %s -> %s", session_id, oc_session_id)
+
+    # Persist the OpenCode session ID
+    db_session.oc_session_id = oc_session_id
+    await db.flush()
+    logger.info(
+        "Created OpenCode session: %s -> %s",
+        db_session.session_key,
+        oc_session_id,
+    )
     return oc_session_id
 
 
@@ -238,6 +309,8 @@ async def _send_to_opencode(
     return "OpenCode 已处理请求，但未返回文本内容。"
 
 
+# ─── Chat endpoints ───────────────────────────────────────────────────────────
+
 @router.post("/api/chat")
 async def chat_with_agent(
     request: ChatRequest,
@@ -249,12 +322,13 @@ async def chat_with_agent(
     Exclusively uses OpenCode Server for all chat interactions.
     Supports multi-turn conversation with full context retention.
     When code_context is provided, it is injected into the message for vulnerability analysis.
+    All conversation history is persisted to SQLite.
     """
     import httpx
     from .settings import get_opencode_config
 
     oc_config = get_opencode_config()
-    session_id = request.session_id or "default"
+    session_key = request.session_id or "default"
 
     server_url = (oc_config.get("server_url") or "").rstrip("/")
     api_key = oc_config.get("api_key") or ""
@@ -268,13 +342,14 @@ async def chat_with_agent(
                 "然后点击「测试连接」并保存配置。"
             ),
             "suggestions": ["前往模型设置"],
-            "session_id": session_id,
+            "session_id": session_key,
         }
 
-    # Build the message text
-    # On first message of a session, prepend the system prompt
-    is_new_session = session_id not in _oc_session_map
+    # ── Get or create DB session ──────────────────────────────────────────────
+    db_session = await _get_or_create_db_session(db, session_key)
+    is_new_session = db_session.oc_session_id is None
 
+    # ── Build message text ────────────────────────────────────────────────────
     message_parts: list[str] = []
 
     if is_new_session:
@@ -296,14 +371,25 @@ async def chat_with_agent(
         headers = {}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        async with httpx.AsyncClient(timeout=30.0, headers=headers) as hclient:
-            oc_session_id = await _get_or_create_oc_session(server_url, session_id, hclient)
+        async with httpx.AsyncClient(timeout=None, headers=headers) as hclient:
+            oc_session_id = await _get_or_create_oc_session(
+                server_url, db_session, db, hclient
+            )
             # Do not pass providerID/modelID — let OpenCode use its own default model
             ai_text = await _send_to_opencode(
                 server_url, oc_session_id, full_message, hclient
             )
 
-        # Log to audit
+        suggestions = _generate_suggestions(request.message, request.code_context)
+
+        # ── Update session title if it's the first real message ───────────────
+        if db_session.title in ("新建挖掘会话", "") or not db_session.title:
+            db_session.title = request.message[:30] + ("..." if len(request.message) > 30 else "")
+
+        # ── Persist messages ──────────────────────────────────────────────────
+        await _save_messages(db, db_session.id, request.message, ai_text, suggestions)
+
+        # ── Audit log ─────────────────────────────────────────────────────────
         log = AuditLog(
             action=f"OpenCode 对话: {request.message[:80]}",
             level="info",
@@ -311,19 +397,39 @@ async def chat_with_agent(
         db.add(log)
         await db.commit()
 
-        suggestions = _generate_suggestions(request.message, request.code_context)
         return {
             "text": ai_text,
             "suggestions": suggestions,
-            "session_id": session_id,
+            "session_id": session_key,
             "provider": "opencode-server",
         }
 
     except Exception as exc:
         logger.exception("OpenCode chat failed: %s", exc)
-        # Remove failed session so next request creates a fresh one
-        _oc_session_map.pop(session_id, None)
+        # Clear the OpenCode session ID so next request creates a fresh one
+        db_session.oc_session_id = None
         err_detail = str(exc)
+        err_text = (
+            f"抓歉，Vuls-Hunter AI 引擎暂时无法响应。\n\n"
+            f"**当前配置：** `{server_url}`\n\n"
+            f"**错误信息：** `{err_detail}`\n\n"
+            "常见原因：\n"
+            "1. OpenCode Server 未启动或地址不正确\n"
+            "2. OpenCode Server 内部的 LLM 提供商 API Key 错误或未配置\n"
+            "3. 网络连接问题或请求超时\n\n"
+            "解决方案：\n"
+            "- 确认 OpenCode Server 已运行，在模型设置中点击「测试连接」\n"
+            "- 确认 OpenCode Server 内部已正确配置 LLM 提供商（如 openai、anthropic）"
+        )
+        # Still persist the user message + error response so history is not lost
+        try:
+            await _save_messages(
+                db, db_session.id, request.message, err_text,
+                ["前往模型设置", "检查 OpenCode Server"]
+            )
+        except Exception:
+            pass
+        await db.commit()
         return {
             "text": (
                 f"抓歉，Vuls-Hunter AI 引擎暂时无法响应。\n\n"
@@ -338,16 +444,115 @@ async def chat_with_agent(
                 "- 确认 OpenCode Server 内部已正确配置 LLM 提供商（如 openai、anthropic）"
             ),
             "suggestions": ["前往模型设置", "检查 OpenCode Server"],
-            "session_id": session_id,
+            "session_id": session_key,
         }
 
 
+@router.get("/api/chat/sessions")
+async def list_chat_sessions(
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """List all persisted chat sessions, newest first."""
+    result = await db.execute(
+        select(ChatSession)
+        .order_by(ChatSession.updated_at.desc())
+        .limit(limit)
+    )
+    sessions = result.scalars().all()
+
+    # For each session, fetch the last message preview
+    out = []
+    for sess in sessions:
+        last_msg_result = await db.execute(
+            select(ChatMessage)
+            .where(ChatMessage.session_id == sess.id)
+            .order_by(ChatMessage.id.desc())
+            .limit(1)
+        )
+        last_msg = last_msg_result.scalar_one_or_none()
+        out.append({
+            "session_key": sess.session_key,
+            "title": sess.title,
+            "last_message": (last_msg.content[:60] + "...") if last_msg and len(last_msg.content) > 60 else (last_msg.content if last_msg else ""),
+            "message_count": 0,  # lightweight, skip count query
+            "created_at": sess.created_at.isoformat(),
+            "updated_at": sess.updated_at.isoformat(),
+        })
+    return out
+
+
+@router.get("/api/chat/sessions/{session_key}/messages")
+async def get_session_messages(
+    session_key: str,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Get all messages for a specific chat session."""
+    result = await db.execute(
+        select(ChatSession)
+        .where(ChatSession.session_key == session_key)
+        .options(selectinload(ChatSession.messages))
+    )
+    sess = result.scalar_one_or_none()
+    if sess is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    return {
+        "session_key": sess.session_key,
+        "title": sess.title,
+        "created_at": sess.created_at.isoformat(),
+        "updated_at": sess.updated_at.isoformat(),
+        "messages": [
+            {
+                "id": m.id,
+                "role": m.role,
+                "content": m.content,
+                "suggestions": json.loads(m.suggestions) if m.suggestions else [],
+                "created_at": m.created_at.isoformat(),
+            }
+            for m in sess.messages
+        ],
+    }
+
+
+@router.delete("/api/chat/sessions/{session_key}")
+async def delete_chat_session(
+    session_key: str,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Delete a chat session and all its messages."""
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.session_key == session_key)
+    )
+    sess = result.scalar_one_or_none()
+    if sess is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    await db.delete(sess)
+    log = AuditLog(action=f"删除对话会话: {session_key}", level="info")
+    db.add(log)
+    await db.commit()
+    return {"ok": True, "session_key": session_key}
+
+
 @router.post("/api/chat/reset-session")
-async def reset_chat_session(body: dict) -> Any:
-    """Reset (delete) an OpenCode session mapping so next message creates a fresh session."""
-    session_id = body.get("session_id", "default")
-    removed = _oc_session_map.pop(session_id, None)
-    return {"ok": True, "removed": removed is not None, "session_id": session_id}
+async def reset_chat_session(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+) -> Any:
+    """Reset the OpenCode session mapping so next message creates a fresh OC session.
+    Does NOT delete message history — only clears the oc_session_id link.
+    """
+    session_key = body.get("session_id", "default")
+    result = await db.execute(
+        select(ChatSession).where(ChatSession.session_key == session_key)
+    )
+    sess = result.scalar_one_or_none()
+    if sess:
+        sess.oc_session_id = None
+        await db.commit()
+        return {"ok": True, "removed": True, "session_id": session_key}
+    return {"ok": True, "removed": False, "session_id": session_key}
 
 
 @router.post("/api/chat/analyze-url")
@@ -380,7 +585,7 @@ def _generate_suggestions(message: str, code_context: str | None = None) -> list
         suggestions = ["分析 SSRF 利用路径", "展示白名单防御方案", "检查内网访问风险"]
     elif any(w in msg_lower for w in ["jwt", "token", "认证", "auth"]):
         suggestions = ["检查 JWT 配置安全性", "分析会话管理缺陷", "展示安全认证方案"]
-    elif any(w in msg_lower for w in ["扫描", "分析", "审计", "scan"]):
+    elif any(w in msg_lower for w in ["扫描", "分析", "审计"]):
         suggestions = ["上传代码压缩包分析", "输入 GitHub URL 分析", "查看已有漏洞报告"]
     else:
         suggestions = ["上传代码包开始漏洞挖掘", "输入 GitHub 仓库 URL 分析", "查看 OWASP Top 10 漏洞"]

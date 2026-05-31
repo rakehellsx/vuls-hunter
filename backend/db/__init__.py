@@ -2,6 +2,8 @@ from .database import AsyncSessionLocal, get_db, init_db
 from .models import (
     AuditLog,
     Base,
+    ChatMessage,
+    ChatSession,
     Project,
     Report,
     Rule,
@@ -17,6 +19,8 @@ __all__ = [
     "init_db",
     "AuditLog",
     "Base",
+    "ChatMessage",
+    "ChatSession",
     "Project",
     "Report",
     "Rule",

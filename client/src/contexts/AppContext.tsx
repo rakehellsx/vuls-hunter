@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import { toast } from "sonner";
 import {
+  ApiChatMessageItem,
   ApiProject,
   ApiReport,
   ApiRule,
@@ -120,6 +121,8 @@ export interface ChatSession {
   lastMessage: string;
   time: string;
   messages: ChatMessage[];
+  /** Whether messages have been loaded from the backend */
+  messagesLoaded?: boolean;
 }
 
 interface AppContextType {
@@ -158,6 +161,7 @@ interface AppContextType {
   setActiveSessionId: (id: string) => void;
   createNewSession: () => void;
   deleteSession: (id: string) => void;
+  loadSessionMessages: (sessionId: string) => Promise<void>;
   sendChatMessage: (text: string, code_context?: string, target_info?: string) => void;
   addChatMessage: (msg: ChatMessage) => void;
   updateChatMessage: (msgId: string, updater: (prev: ChatMessage) => ChatMessage) => void;
@@ -238,15 +242,31 @@ function mapApiReport(r: ApiReport): Report {
   };
 }
 
-// ==================== INITIAL CHAT SESSION ====================
+/** Convert a backend ApiChatMessageItem to a frontend ChatMessage. */
+function mapApiChatMessage(m: ApiChatMessageItem): ChatMessage {
+  const d = new Date(m.created_at);
+  const time = isNaN(d.getTime())
+    ? ""
+    : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return {
+    id: `MSG-DB-${m.id}`,
+    sender: m.role === "user" ? "user" : "ai",
+    text: m.content,
+    time,
+    suggestions: m.suggestions?.length ? m.suggestions : undefined,
+  };
+}
 
-const INITIAL_SESSION_ID = "SESSION-001";
-const INITIAL_SESSIONS: ChatSession[] = [
-  {
-    id: INITIAL_SESSION_ID,
+// ==================== WELCOME SESSION (fallback) ====================
+
+const WELCOME_SESSION_ID = "SESSION-WELCOME";
+function makeWelcomeSession(): ChatSession {
+  return {
+    id: WELCOME_SESSION_ID,
     title: "欢迎使用 Vuls-Hunter",
     lastMessage: "您好！我是 AI 安全分析助手...",
     time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    messagesLoaded: true,
     messages: [
       {
         id: "MSG-WELCOME",
@@ -256,8 +276,8 @@ const INITIAL_SESSIONS: ChatSession[] = [
         suggestions: ["开始快速扫描", "查看当前漏洞", "创建安全规则"],
       },
     ],
-  },
-];
+  };
+}
 
 // ==================== CONTEXT ====================
 
@@ -284,8 +304,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     vulnerabilities: [],
     code: "",
   });
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>(INITIAL_SESSIONS);
-  const [activeSessionId, setActiveSessionId] = useState(INITIAL_SESSION_ID);
+
+  // Chat state — starts with welcome session; replaced by backend data on init
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([makeWelcomeSession()]);
+  const [activeSessionId, setActiveSessionId] = useState(WELCOME_SESSION_ID);
   const [isChatTyping, setIsChatTyping] = useState(false);
 
   // Active WebSocket refs
@@ -352,6 +374,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
+  // ─── Load chat sessions from backend ─────────────────────────────────────
+
+  const loadChatSessions = useCallback(async () => {
+    try {
+      const apiSessions = await chatApi.listSessions();
+      if (apiSessions.length === 0) {
+        // No history yet — keep welcome session
+        return;
+      }
+
+      const mapped: ChatSession[] = apiSessions.map((s) => ({
+        id: s.session_key,
+        title: s.title || "对话会话",
+        lastMessage: s.last_message || "",
+        time: (() => {
+          const d = new Date(s.updated_at);
+          return isNaN(d.getTime())
+            ? ""
+            : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        })(),
+        messagesLoaded: false,
+        messages: [],
+      }));
+
+      setChatSessions(mapped);
+      setActiveSessionId(mapped[0].id);
+    } catch (err) {
+      console.error("Failed to load chat sessions:", err);
+      // Keep welcome session on error
+    }
+  }, []);
+
   const refreshData = useCallback(async () => {
     await Promise.all([loadProjects(), loadRules(), loadReports(), loadAuditLogs()]);
   }, [loadProjects, loadRules, loadReports, loadAuditLogs]);
@@ -359,11 +413,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     const init = async () => {
       setIsLoading(true);
-      await refreshData();
+      await Promise.all([refreshData(), loadChatSessions()]);
       setIsLoading(false);
     };
     init();
-  }, [refreshData]);
+  }, [refreshData, loadChatSessions]);
+
+  // ─── Load messages for a session on demand ────────────────────────────────
+
+  const loadSessionMessages = useCallback(async (sessionId: string) => {
+    // Skip welcome session and already-loaded sessions
+    const sess = chatSessions.find((s) => s.id === sessionId);
+    if (!sess || sess.messagesLoaded || sessionId === WELCOME_SESSION_ID) return;
+
+    try {
+      const detail = await chatApi.getSessionMessages(sessionId);
+      const messages = detail.messages.map(mapApiChatMessage);
+      setChatSessions((prev) =>
+        prev.map((s) =>
+          s.id === sessionId
+            ? { ...s, messages, messagesLoaded: true }
+            : s
+        )
+      );
+    } catch (err) {
+      console.error("Failed to load session messages:", err);
+    }
+  }, [chatSessions]);
+
+  // Auto-load messages when active session changes
+  useEffect(() => {
+    loadSessionMessages(activeSessionId);
+  }, [activeSessionId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Projects ─────────────────────────────────────────────────────────────
 
@@ -474,55 +555,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const fixVulnerability = useCallback(async (projectId: string, vulnId: string) => {
     const project = projects.find((p) => p.id === projectId);
     const vuln = project?.vulnerabilities.find((v) => v.id === vulnId);
-
-    if (vuln?._backendId && vuln._scanId) {
-      try {
-        await scansApi.updateVulnStatus(vuln._scanId, vuln._backendId, "fixed");
-      } catch (err) {
-        console.error("Failed to update vuln status:", err);
-      }
+    if (!vuln?._backendId) return;
+    try {
+      await scansApi.updateVulnerability(vuln._backendId, "fixed");
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === projectId
+            ? {
+                ...p,
+                vulnerabilities: p.vulnerabilities.map((v) =>
+                  v.id === vulnId ? { ...v, status: "fixed" } : v
+                ),
+              }
+            : p
+        )
+      );
+      toast.success("漏洞已标记为已修复");
+    } catch (err) {
+      toast.error(`操作失败: ${err}`);
     }
-
-    setProjects((prev) =>
-      prev.map((p) =>
-        p.id === projectId
-          ? {
-              ...p,
-              vulnerabilities: p.vulnerabilities.map((v) =>
-                v.id === vulnId ? { ...v, status: "fixed" as const } : v
-              ),
-            }
-          : p
-      )
-    );
-    toast.success("AI 智能感知修复补丁已成功应用并自动验证通过！");
   }, [projects]);
 
   const ignoreVulnerability = useCallback(async (projectId: string, vulnId: string) => {
     const project = projects.find((p) => p.id === projectId);
     const vuln = project?.vulnerabilities.find((v) => v.id === vulnId);
-
-    if (vuln?._backendId && vuln._scanId) {
-      try {
-        await scansApi.updateVulnStatus(vuln._scanId, vuln._backendId, "ignored");
-      } catch (err) {
-        console.error("Failed to update vuln status:", err);
-      }
+    if (!vuln?._backendId) return;
+    try {
+      await scansApi.updateVulnerability(vuln._backendId, "ignored");
+      setProjects((prev) =>
+        prev.map((p) =>
+          p.id === projectId
+            ? {
+                ...p,
+                vulnerabilities: p.vulnerabilities.map((v) =>
+                  v.id === vulnId ? { ...v, status: "ignored" } : v
+                ),
+              }
+            : p
+        )
+      );
+      toast.info("漏洞已忽略");
+    } catch (err) {
+      toast.error(`操作失败: ${err}`);
     }
-
-    setProjects((prev) =>
-      prev.map((p) =>
-        p.id === projectId
-          ? {
-              ...p,
-              vulnerabilities: p.vulnerabilities.map((v) =>
-                v.id === vulnId ? { ...v, status: "ignored" as const } : v
-              ),
-            }
-          : p
-      )
-    );
-    toast.info("已将该漏洞标记为忽略（智能学习库已记录此反馈）");
   }, [projects]);
 
   // ─── Rules ────────────────────────────────────────────────────────────────
@@ -540,7 +615,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         rule_type: rule.type,
       });
       setRules((prev) => [mapApiRule(created), ...prev]);
-      toast.success(`安全规则 "${rule.name}" 已成功创建并下发至引擎！`);
+      toast.success("安全规则创建成功！");
     } catch (err) {
       toast.error(`创建规则失败: ${err}`);
     }
@@ -548,10 +623,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteRule = useCallback(async (id: string) => {
     const rule = rules.find((r) => r.id === id);
-    if (rule?.isBuiltin) {
-      toast.error("内置规则不可删除");
-      return;
-    }
     if (!rule?._backendId) return;
     try {
       await rulesApi.delete(rule._backendId);
@@ -566,11 +637,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const toggleIntegration = useCallback(
     (key: "git" | "jenkins" | "jira" | "vscode" | "dingtalk") => {
-      setIntegrations((prev) => {
-        const next = { ...prev, [key]: !prev[key] };
-        toast.success(`${key.toUpperCase()} 集成状态已切换为: ${next[key] ? "开启" : "关闭"}`);
-        return next;
-      });
+      setIntegrations((prev) => ({ ...prev, [key]: !prev[key] }));
     },
     []
   );
@@ -578,26 +645,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // ─── Quick Scan ───────────────────────────────────────────────────────────
 
   const triggerQuickScan = useCallback(async (code: string, lang: string) => {
-    setQuickScanResult({
-      status: "scanning",
-      logs: ["启动 Strix AI 漏洞挖掘引擎...", "正在初始化扫描环境..."],
-      vulnerabilities: [],
-      code,
-    });
-
+    setQuickScanResult({ status: "scanning", logs: ["初始化快速扫描..."], vulnerabilities: [], code });
     try {
-      const scan = await scansApi.startQuick({
-        target: `quick-scan-${lang.toLowerCase()}`,
-        code,
-        language: lang,
+      const scan = await scansApi.create({
+        target: `inline-${lang}-snippet`,
         scan_mode: "quick",
+        is_whitebox: true,
+        instruction: code,
       });
-
       const scanId = scan.id;
       setQuickScanResult((prev) => ({ ...prev, scanId }));
 
-      // Connect WebSocket for real-time logs
-      if (scanWsRef.current) scanWsRef.current.close();
       const ws = createScanWebSocket(
         scanId,
         (event) => {
@@ -657,6 +715,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       title: "新建挖掘会话",
       lastMessage: "",
       time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      messagesLoaded: true,
       messages: [],
     };
     setChatSessions((prev) => [newSession, ...prev]);
@@ -664,11 +723,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const deleteSession = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      // If it's the welcome session (no backend record), just remove from state
+      if (id === WELCOME_SESSION_ID) {
+        setChatSessions((prev) => {
+          const filtered = prev.filter((s) => s.id !== id);
+          if (activeSessionId === id && filtered.length > 0) {
+            setActiveSessionId(filtered[0].id);
+          }
+          return filtered;
+        });
+        return;
+      }
+
+      try {
+        // Try to delete from backend (ignore 404 for sessions not yet persisted)
+        await chatApi.deleteSession(id).catch(() => {});
+      } catch {}
+
       setChatSessions((prev) => {
         const filtered = prev.filter((s) => s.id !== id);
-        if (activeSessionId === id && filtered.length > 0) {
-          setActiveSessionId(filtered[0].id);
+        if (activeSessionId === id) {
+          if (filtered.length > 0) {
+            setActiveSessionId(filtered[0].id);
+          } else {
+            // Create a fresh welcome session
+            const welcome = makeWelcomeSession();
+            setChatSessions([welcome]);
+            setActiveSessionId(welcome.id);
+            return [welcome];
+          }
         }
         return filtered;
       });
@@ -788,7 +872,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsChatTyping(false);
       }
     },
-    [activeSessionId]
+    [activeSessionId, chatSessions]
   );
 
   return (
@@ -817,6 +901,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveSessionId,
         createNewSession,
         deleteSession,
+        loadSessionMessages,
         sendChatMessage,
         addChatMessage,
         updateChatMessage,

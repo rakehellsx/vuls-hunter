@@ -156,6 +156,42 @@ class Rule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class ChatSession(Base):
+    """Persistent chat session for the AI vulnerability hunting dialog."""
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # Frontend session identifier (e.g. "SESSION-1717000000000")
+    session_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), default="新建挖掘会话")
+    # OpenCode Server session ID mapped to this session
+    oc_session_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+    messages: Mapped[list["ChatMessage"]] = relationship(
+        "ChatMessage", back_populates="session", cascade="all, delete-orphan",
+        order_by="ChatMessage.id"
+    )
+
+
+class ChatMessage(Base):
+    """A single message in a chat session."""
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(Integer, ForeignKey("chat_sessions.id"), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)  # "user" or "assistant"
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    # Optional JSON-serialized suggestions list (for assistant messages)
+    suggestions: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    session: Mapped[ChatSession] = relationship("ChatSession", back_populates="messages")
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
 

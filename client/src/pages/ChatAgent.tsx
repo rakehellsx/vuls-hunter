@@ -392,6 +392,7 @@ export default function ChatAgent() {
     setActiveSessionId,
     createNewSession,
     deleteSession,
+    loadSessionMessages,
     sendChatMessage,
     addChatMessage,
     updateChatMessage,
@@ -710,7 +711,10 @@ export default function ChatAgent() {
               return (
                 <div
                   key={sess.id}
-                  onClick={() => setActiveSessionId(sess.id)}
+                  onClick={() => {
+                    setActiveSessionId(sess.id);
+                    loadSessionMessages(sess.id);
+                  }}
                   className={`p-2.5 rounded-lg border transition-all duration-200 cursor-pointer flex flex-col gap-1 relative group ${
                     isActive ? "bg-white border-blue-500 shadow-sm" : "border-transparent hover:bg-stone-100/60"
                   }`}

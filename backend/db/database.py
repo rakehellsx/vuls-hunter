@@ -7,7 +7,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from .models import Base, Rule, SeverityLevel
+from .models import Base, ChatMessage, ChatSession, Rule, SeverityLevel
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,34 @@ async def _migrate_schema() -> None:
             if col_name not in cols:
                 await db.execute(f"ALTER TABLE vulnerabilities ADD COLUMN {col_name} {col_type}")
                 logger.info("Schema migration: added column vulnerabilities.%s", col_name)
+
+        # Ensure chat_sessions table exists (idempotent)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_key VARCHAR(128) UNIQUE NOT NULL,
+                title VARCHAR(255) DEFAULT '新建挖掘会话',
+                oc_session_id VARCHAR(256),
+                created_at DATETIME DEFAULT (datetime('now')),
+                updated_at DATETIME DEFAULT (datetime('now'))
+            )
+        """)
+        await db.execute("CREATE INDEX IF NOT EXISTS ix_chat_sessions_session_key ON chat_sessions(session_key)")
+
+        # Ensure chat_messages table exists (idempotent)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+                role VARCHAR(16) NOT NULL,
+                content TEXT NOT NULL,
+                suggestions TEXT,
+                created_at DATETIME DEFAULT (datetime('now'))
+            )
+        """)
+
         await db.commit()
+        logger.info("Schema migration: chat_sessions and chat_messages tables ensured")
 
 
 async def _seed_default_rules() -> None:

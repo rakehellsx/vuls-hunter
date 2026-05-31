@@ -290,6 +290,33 @@ export const auditLogsApi = {
 // Chat
 // ─────────────────────────────────────────────
 
+// ─── Chat API types ───────────────────────────────────────────────────────────
+
+export interface ApiChatSessionSummary {
+  session_key: string;
+  title: string;
+  last_message: string;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiChatMessageItem {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  suggestions: string[];
+  created_at: string;
+}
+
+export interface ApiChatSessionDetail {
+  session_key: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages: ApiChatMessageItem[];
+}
+
 export const chatApi = {
   send: async (
     message: string,
@@ -323,6 +350,21 @@ export const chatApi = {
       method: "POST",
       body: JSON.stringify({ session_id }),
     }),
+
+  /** List all persisted chat sessions (newest first). */
+  listSessions: () =>
+    request<ApiChatSessionSummary[]>("/chat/sessions"),
+
+  /** Get full message history for a session. */
+  getSessionMessages: (session_key: string) =>
+    request<ApiChatSessionDetail>(`/chat/sessions/${encodeURIComponent(session_key)}/messages`),
+
+  /** Permanently delete a session and all its messages. */
+  deleteSession: (session_key: string) =>
+    request<{ ok: boolean; session_key: string }>(
+      `/chat/sessions/${encodeURIComponent(session_key)}`,
+      { method: "DELETE" }
+    ),
 };
 
 // ─────────────────────────────────────────────
